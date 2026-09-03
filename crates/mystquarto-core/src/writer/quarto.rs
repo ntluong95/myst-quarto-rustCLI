@@ -27,16 +27,21 @@ impl<'a> QuartoWriter<'a> {
         }
     }
 
-    /// Renders `doc` to a complete `.qmd` file's text. Frontmatter is
-    /// passed through verbatim — cross-dialect frontmatter mapping is
-    /// Phase 6's job (see this crate's `ir` module docs on
-    /// `Frontmatter::raw`), not this writer's.
+    /// Renders `doc` to a complete `.qmd` file's text, plus any non-fatal
+    /// notices from mapping its frontmatter (reference §8.4's `label`/`math`
+    /// drops — see [`crate::frontmatter::myst_to_quarto`]). Frontmatter is
+    /// mapped field-by-field — `kernelspec` -> `jupyter`/`engine`, `exports`
+    /// -> `format`, etc. — with every untouched key (critically `abstract`,
+    /// D9) surviving byte-identically.
     #[must_use]
-    pub fn write(&self, doc: &Document) -> String {
+    pub fn write(&self, doc: &Document) -> (String, Vec<crate::config::ConfigWarning>) {
         let mut out = String::new();
+        let mut warnings = Vec::new();
         if let Some(fm) = &doc.frontmatter {
+            let (mapped, fm_warnings) = crate::frontmatter::myst_to_quarto(fm);
+            warnings = fm_warnings;
             out.push_str("---\n");
-            out.push_str(&fm.raw);
+            out.push_str(&mapped);
             out.push_str("---\n");
         }
         for (i, block) in doc.blocks.iter().enumerate() {
@@ -54,7 +59,7 @@ impl<'a> QuartoWriter<'a> {
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        out
+        (out, warnings)
     }
 
     /// `source` is the file whose text is being rewritten — needed so a
@@ -706,7 +711,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "## Data Analysis {#sec-data-analysis}");
     }
 
@@ -731,7 +736,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert_eq!(
             out.trim(),
             "![Collection methodology.](images/fruit-flies.png){#fig-samples}"
@@ -758,7 +763,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert!(out.contains("| A | B |"));
         assert!(out.contains(": Phenotypic variation. {#tbl-phenotypic-variation}"));
     }
@@ -782,7 +787,7 @@ mod tests {
         let docs = vec![(std::path::PathBuf::from("article.md"), doc)];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
 
         // Every bare cross-reference `@fig-x`/`@tbl-x`/`@sec-x`/`@eq-x` in
         // the rendered output must have a matching `{#id}` (or
@@ -876,7 +881,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         // The figure's own label (`fig:environment`) wins over the cell's
         // own name (`nb:analysis` -> `fig-analysis`) — see
         // `resolve_embed_id`'s docs on why there is only one id, not two.
@@ -907,7 +912,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "{{< embed analysis.ipynb#fig-analysis >}}");
     }
 
@@ -929,7 +934,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "See [@smith2020] for details.");
     }
 
@@ -951,18 +956,21 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "See [@10.1038/nmeth.1974].");
     }
 
     #[test]
-    fn frontmatter_passes_through_verbatim() {
+    fn untouched_frontmatter_fields_pass_through_unchanged() {
+        let raw = "title: Sample\nabstract: |\n  Line one.\n  Line two.\n";
         let docs = vec![(
             std::path::PathBuf::from("a.md"),
             Document {
                 frontmatter: Some(Frontmatter {
-                    raw: "title: Sample\nabstract: |\n  Line one.\n  Line two.\n".to_string(),
-                    parsed: crate::YamlValue::Null,
+                    raw: raw.to_string(),
+                    parsed: crate::YamlValue::Mapping(
+                        crate::yaml::parse_mapping(raw).expect("valid YAML"),
+                    ),
                 }),
                 blocks: vec![block(
                     BlockKind::Paragraph {
@@ -976,9 +984,41 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert!(out.starts_with("---\ntitle: Sample\nabstract: |\n  Line one.\n  Line two.\n---\n"));
         assert!(out.contains("Body."));
+    }
+
+    /// Proves the writer actually calls `crate::frontmatter::myst_to_quarto`
+    /// (not just that module's own unit tests) — `kernelspec` must become
+    /// `jupyter` in the rendered `.qmd` text.
+    #[test]
+    fn kernelspec_frontmatter_is_mapped_to_jupyter_by_the_writer() {
+        let raw = "title: Sample\nkernelspec:\n  name: python3\n";
+        let docs = vec![(
+            std::path::PathBuf::from("a.md"),
+            Document {
+                frontmatter: Some(Frontmatter {
+                    raw: raw.to_string(),
+                    parsed: crate::YamlValue::Mapping(
+                        crate::yaml::parse_mapping(raw).expect("valid YAML"),
+                    ),
+                }),
+                blocks: vec![block(
+                    BlockKind::Paragraph {
+                        lines: vec!["Body.".to_string()],
+                    },
+                    0,
+                )],
+                source: std::path::PathBuf::from("a.md"),
+                engine: Some(Engine::Jupyter),
+            },
+        )];
+        let registry = registry_for(&docs);
+        let writer = QuartoWriter::new(&registry);
+        let (out, _) = writer.write(&docs[0].1);
+        assert!(out.contains("jupyter: python3"));
+        assert!(!out.contains("kernelspec"));
     }
 
     #[test]
@@ -1006,7 +1046,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert!(out.contains("```{python}"));
         assert!(out.contains("#| echo: false"));
         assert!(out.contains("x = 1"));
@@ -1040,7 +1080,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         assert!(
             !out.contains(".callout-important collapse=\"true\"}"),
             "an unescaped title must not be able to inject a second class/attribute, got:\n{out}"
@@ -1071,7 +1111,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let out = writer.write(&docs[0].1);
+        let (out, _) = writer.write(&docs[0].1);
         // The escaped quote (`\"`, two characters: backslash then quote)
         // must appear on both sides of the escaped value — proving the
         // attribute's own delimiter quotes were not closed early by the

@@ -225,7 +225,12 @@ fn render_scalar_inline(value: &YamlValue) -> String {
 /// interior newlines (never valid as a plain scalar).
 fn quote_scalar_string(s: &str) -> String {
     if needs_quoting(s) {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        format!(
+            "\"{}\"",
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        )
     } else {
         s.to_string()
     }
@@ -378,6 +383,30 @@ mod tests {
             vec![(
                 "open_access".to_string(),
                 YamlValue::String("no".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn plain_string_with_interior_newline_escapes_and_reparses() {
+        // A folded/block scalar read back from source and re-emitted as a
+        // plain `String` (not `BlockLiteral`) must still produce valid YAML:
+        // the interior newline has to be escaped, not emitted as a literal
+        // line break inside a double-quoted scalar (invalid: continuation
+        // lines must be more indented than the parent, which a column-0
+        // field never is).
+        let doc = YamlDoc(vec![EmitField::new(
+            "description",
+            YamlValue::String("first line\nsecond line".into()),
+        )]);
+        let text = emit(&doc);
+        assert_eq!(text, "description: \"first line\\nsecond line\"\n");
+        let parsed = super::super::parse_mapping(&text).expect("emitted YAML must parse");
+        assert_eq!(
+            parsed,
+            vec![(
+                "description".to_string(),
+                YamlValue::String("first line\nsecond line".to_string())
             )]
         );
     }

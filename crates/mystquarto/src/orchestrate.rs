@@ -22,9 +22,9 @@
 //!    successfully.
 //! 2. **Config overwrite gate.** An existing hand-authored `myst.yml`/
 //!    `_quarto.yml` at the computed output location is never overwritten
-//!    without `--force`; instead the CLI reports a conflict and would write
-//!    alongside it as `<name>.new` (real content for that file is Phase
-//!    6's).
+//!    without `--force`; instead the CLI reports a conflict, naming the path
+//!    it would have written the real conversion to (`<name>.new`) without
+//!    actually writing it.
 //! 3. **Clean VCS state or `--force`.** [`check_in_place_preconditions`]
 //!    shells out to `git status --porcelain` with `cwd` set to the input
 //!    root. Dirty output, a `git` failure, or the input not being inside a
@@ -63,6 +63,7 @@ use crate::discover::{self, Direction};
 /// directory.
 const SIDECAR_DIR: &str = ".mystquarto";
 const LABELS_FILE: &str = "labels.json";
+const PRESERVED_CONFIG_FILE: &str = "preserved.json";
 
 /// What happened (or would happen) to one discovered file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +94,10 @@ pub struct RunReport {
     pub outcomes: Vec<FileOutcome>,
     pub assets: Option<AssetCopyReport>,
     /// Set if a hand-authored config file existed at the computed output
-    /// location and `--force` was not passed — the path of the `.new` file
-    /// that would hold the real conversion once Phase 6 exists.
+    /// location and `--force` was not passed — the path this run *would*
+    /// have written the real conversion to, reported so the user can
+    /// inspect it manually. Never actually written (the existing file is
+    /// left untouched instead); see `alongside_new_path`'s call site.
     pub config_conflict: Option<PathBuf>,
     /// Non-fatal notices from the batch pipeline (label collisions, an
     /// unreadable notebook, a stale/malformed sidecar, …) plus this
@@ -246,7 +249,7 @@ fn execute_directory(
                     output: conflict_path.clone(),
                     status: FileStatus::Failed(format!(
                         "refusing to overwrite existing hand-authored {} without --force; \
-                         would write {} instead (real config conversion lands in Phase 6)",
+                         would write {} instead",
                         out_config_path.display(),
                         conflict_path.display()
                     )),
@@ -255,15 +258,32 @@ fn execute_directory(
                 continue;
             }
 
-            // Config *conversion* is Phase 6's job; only the overwrite gate
-            // above is real this phase.
-            outcomes.push(FileOutcome {
-                input: config_path.clone(),
-                output: out_config_path,
-                status: FileStatus::Failed(
-                    "config conversion is not implemented yet (Phase 6)".to_string(),
-                ),
-            });
+            match convert_config_file(
+                config_path,
+                direction,
+                canonical_input,
+                effective_output_root,
+                &batch,
+            ) {
+                Ok((text, config_warnings)) => {
+                    write_atomic(&out_config_path, text.as_bytes()).with_context(|| {
+                        format!("could not write {}", out_config_path.display())
+                    })?;
+                    outcomes.push(FileOutcome {
+                        input: config_path.clone(),
+                        output: out_config_path,
+                        status: FileStatus::Converted,
+                    });
+                    warnings.extend(config_warnings);
+                }
+                Err(e) => {
+                    outcomes.push(FileOutcome {
+                        input: config_path.clone(),
+                        output: out_config_path,
+                        status: FileStatus::Failed(e.to_string()),
+                    });
+                }
+            }
         }
     }
 
@@ -380,6 +400,7 @@ enum ContentBatch {
         notebook_renames:
             std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
         sidecar: mystquarto_core::registry::sidecar::LabelSidecar,
+        used_citation_keys: std::collections::BTreeSet<String>,
         warnings: Vec<String>,
     },
     QuartoToMyst {
@@ -433,6 +454,7 @@ fn run_content_batch(
                 errors: result.errors,
                 notebook_renames: result.notebook_renames,
                 sidecar: result.sidecar,
+                used_citation_keys: result.used_citation_keys,
                 warnings: batch_warning_strings(result.warnings),
             }
         }
@@ -452,6 +474,115 @@ fn run_content_batch(
             }
         }
     }
+}
+
+/// Converts one config file (`myst.yml`/`_quarto.yml`) and returns its
+/// rendered text plus any non-fatal notices — bibliography synthesis and the
+/// RT-14 missing-citation diagnostic for `MystToQuarto`, or the restored
+/// `.mystquarto/preserved.json` fields for `QuartoToMyst`.
+///
+/// The RT-14 citation-key check only runs when `batch` actually holds a
+/// `MystToQuarto` result (i.e. content was parsed this run — not under
+/// `--dry-run`/`--config-only`, where nothing was read to check citations
+/// against); bibliography *synthesis* itself only needs a `.bib` file to
+/// exist, so it still runs under `--config-only`.
+///
+/// # Errors
+/// Returns an error if `config_path` cannot be read, is not valid YAML, or
+/// the sidecar write (`MystToQuarto`) fails.
+fn convert_config_file(
+    config_path: &Path,
+    direction: Direction,
+    canonical_input: &Path,
+    effective_output_root: &Path,
+    batch: &Option<ContentBatch>,
+) -> Result<(String, Vec<String>)> {
+    let text = fs::read_to_string(config_path)
+        .with_context(|| format!("could not read {}", config_path.display()))?;
+
+    match direction {
+        Direction::MystToQuarto => {
+            let bib_path = find_bib_file(canonical_input);
+            let result =
+                mystquarto_core::config::myst_to_quarto::convert(&text, bib_path.as_deref())
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", config_path.display()))?;
+
+            let mut warnings: Vec<String> =
+                result.warnings.into_iter().map(|w| w.message).collect();
+
+            // Written unconditionally, even when empty: this sidecar is the
+            // authoritative recovery channel (RT-11), so a run that removes
+            // every previously-unmappable field from myst.yml must clear the
+            // stale sidecar too, not leave it holding fields the source no
+            // longer has.
+            let sidecar_path = effective_output_root
+                .join(SIDECAR_DIR)
+                .join(PRESERVED_CONFIG_FILE);
+            mystquarto_core::config::sidecar::write(&result.preserved_fields, &sidecar_path)
+                .with_context(|| format!("could not write {}", sidecar_path.display()))?;
+
+            if let (
+                Some(bib_rel),
+                Some(ContentBatch::MystToQuarto {
+                    used_citation_keys, ..
+                }),
+            ) = (&bib_path, batch)
+            {
+                if let Ok(bib_text) = fs::read_to_string(canonical_input.join(bib_rel)) {
+                    let defined =
+                        mystquarto_core::config::bibliography::bib_defined_keys(&bib_text);
+                    warnings.extend(
+                        mystquarto_core::config::bibliography::missing_citation_warnings(
+                            used_citation_keys,
+                            &defined,
+                        )
+                        .into_iter()
+                        .map(|w| w.message),
+                    );
+                }
+            }
+
+            Ok((result.text, warnings))
+        }
+        Direction::QuartoToMyst => {
+            let sidecar_path = canonical_input
+                .join(SIDECAR_DIR)
+                .join(PRESERVED_CONFIG_FILE);
+            let preserved = mystquarto_core::config::sidecar::read(&sidecar_path).map(|p| {
+                p.fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), mystquarto_core::config::sidecar::json_to_yaml(v)))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            });
+            let result =
+                mystquarto_core::config::quarto_to_myst::convert(&text, preserved.as_ref())
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", config_path.display()))?;
+            Ok((
+                result.text,
+                result.warnings.into_iter().map(|w| w.message).collect(),
+            ))
+        }
+    }
+}
+
+/// Finds a `.bib` file directly inside `dir` (the conventional location for
+/// `references.bib` alongside `myst.yml`) for RT-14's bibliography synthesis
+/// and citation-key diagnostic — not a recursive search: a `.bib` anywhere
+/// deeper in the tree is not what MyST's own auto-load convention looks for
+/// either. Returns its file name (not a full path) since that is exactly
+/// what a synthesized `bibliography:` field should contain — a project-
+/// relative reference, not a local-filesystem path. Ties break
+/// alphabetically for determinism if more than one `.bib` exists.
+fn find_bib_file(dir: &Path) -> Option<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|name| name.to_ascii_lowercase().ends_with(".bib"))
+        .collect();
+    names.sort();
+    names.into_iter().next()
 }
 
 /// Relabels every notebook `notebook_renames` names (against its
@@ -722,6 +853,13 @@ pub fn print_summary(report: &RunReport, dry_run: bool) -> i32 {
     if let Some(conflict) = &report.config_conflict {
         eprintln!("  config conflict: would write {}", conflict.display());
     }
+    // Non-fatal notices (label collisions, RT-14's bibliography/citation
+    // diagnostics, …) were silently collected but never surfaced before
+    // this — Phase 7 owns real severity classes and `--strict` gating, but
+    // printing what was already computed needs neither.
+    for warning in &report.warnings {
+        eprintln!("  warning: {warning}");
+    }
 
     i32::from(report.has_failures())
 }
@@ -893,7 +1031,7 @@ mod tests {
         let mut args = base_args(tmp.clone());
         args.output = Some(tmp.clone()); // -o pointed at the input tree itself
         args.in_place = false; // the flag the original bug keyed off of
-        args.no_config = true; // isolate this test from the unrelated Phase 6 gap
+        args.no_config = true; // isolate this test to the notebook-relabel gate under test
 
         let report = execute(&args, Direction::MystToQuarto).unwrap();
         assert!(!report.has_failures(), "{:?}", report.outcomes);
@@ -973,7 +1111,7 @@ mod tests {
 
         let mut args = base_args(tmp.clone());
         args.in_place = true;
-        args.no_config = true; // isolate from the unrelated Phase 6 gap
+        args.no_config = true; // isolate this test to the delete-only-after-success behavior under test
         let report = execute(&args, Direction::MystToQuarto).unwrap();
         assert!(!report.has_failures(), "{:?}", report.outcomes);
 
@@ -1071,8 +1209,8 @@ mod tests {
             Some(output_dir.join("_quarto.yml.new"))
         );
         assert_eq!(fs::read_to_string(&existing).unwrap(), "hand: authored\n");
-        // `.new` is a *reported* conflict path this phase, not an actually
-        // written file — real content for it is Phase 6's job.
+        // `.new` is a *reported* conflict path, never an actually written
+        // file — see `RunReport::config_conflict`'s docs.
         assert!(!output_dir.join("_quarto.yml.new").exists());
         assert!(report.has_failures());
 
@@ -1094,10 +1232,9 @@ mod tests {
         let report = execute(&args, Direction::MystToQuarto).unwrap();
 
         assert_eq!(report.config_conflict, None);
-        // Still untouched: config *conversion* itself isn't implemented
-        // until Phase 6, force or not — only the overwrite *gate* is real
-        // this phase.
-        assert_eq!(fs::read_to_string(&existing).unwrap(), "hand: authored\n");
+        // --force allows the overwrite, and the write is now a real,
+        // converted `_quarto.yml` — not the hand-authored placeholder.
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "title: Test\n");
 
         cleanup(&tmp);
     }

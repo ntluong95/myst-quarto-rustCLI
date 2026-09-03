@@ -18,7 +18,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::registry::sidecar::{self, LabelSidecar};
-use crate::writer::{resolve_embed_id, MystWriter, QuartoWriter, RestoreMap};
+use crate::writer::{
+    known_reference_labels, resolve_embed_id, MystWriter, QuartoWriter, RestoreMap,
+};
 use crate::{
     Block, BlockKind, Document, EmbedTarget, FigureSource, LabelRegistry, MystReader,
     NotebookCellIndex, QuartoReader, ReaderContext, ReaderError,
@@ -107,6 +109,13 @@ pub struct MystToQuartoBatch {
     /// The label sidecar to merge-write at the output root (unless the
     /// caller's `--no-label-map` is set) — `crate::registry::sidecar::write_merged`.
     pub sidecar: LabelSidecar,
+    /// Every citation key referenced anywhere across `documents`, computed
+    /// with the batch's own [`known_reference_labels`] so a bare `@token`
+    /// that is actually a cross-reference (e.g. `@sec:data-analysis`) is
+    /// never misclassified as a citation — RT-14's diagnostic (`crate::config::bibliography`)
+    /// needs this list but has no access to `documents` or the registry
+    /// itself, both of which live only inside this function.
+    pub used_citation_keys: std::collections::BTreeSet<String>,
     pub warnings: Vec<BatchWarning>,
 }
 
@@ -146,11 +155,25 @@ pub fn convert_myst_to_quarto_batch(
     let writer = QuartoWriter::new(&registry);
     let mut rendered = BTreeMap::new();
     for (path, doc) in &documents {
-        rendered.insert(path.clone(), writer.write(doc));
+        let (text, fm_warnings) = writer.write(doc);
+        rendered.insert(path.clone(), text);
+        warnings.extend(fm_warnings.into_iter().map(|w| BatchWarning {
+            file: Some(path.clone()),
+            message: w.message,
+        }));
     }
 
     let (notebook_renames, rename_warnings) = collect_notebook_renames(&registry, &documents);
     warnings.extend(rename_warnings);
+
+    let citation_known_labels = known_reference_labels(&registry);
+    let mut used_citation_keys = std::collections::BTreeSet::new();
+    for (_, doc) in &documents {
+        used_citation_keys.extend(crate::config::bibliography::citation_keys_in_document(
+            doc,
+            &citation_known_labels,
+        ));
+    }
 
     // The sidecar's `content_hash` must be of the *rendered Quarto output*,
     // not the MyST source — that is the file a later reverse conversion
@@ -170,6 +193,7 @@ pub fn convert_myst_to_quarto_batch(
         errors,
         notebook_renames,
         sidecar,
+        used_citation_keys,
         warnings,
     }
 }
@@ -474,7 +498,12 @@ pub fn convert_quarto_to_myst_batch(
     let writer = MystWriter::new(&restore, known_labels);
     let mut rendered = BTreeMap::new();
     for (path, doc) in &documents {
-        rendered.insert(path.clone(), writer.write(doc));
+        let (text, fm_warnings) = writer.write(doc);
+        rendered.insert(path.clone(), text);
+        warnings.extend(fm_warnings.into_iter().map(|w| BatchWarning {
+            file: Some(path.clone()),
+            message: w.message,
+        }));
     }
 
     QuartoToMystBatch {

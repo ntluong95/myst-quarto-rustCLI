@@ -63,6 +63,11 @@ pub const ASSET_SKIP_DIRS: &[&str] = &[
     ".pytest_cache",
     "_site",
     ".quarto",
+    // mystquarto's own sidecar directory (labels.json, preserved.json):
+    // never a generic asset. Walking into it here would let a stale copy in
+    // the input tree overwrite the freshly-written sidecar in the output
+    // tree — those writers own this directory exclusively.
+    ".mystquarto",
 ];
 
 /// What happened during one [`copy_assets`] call, broken down so a caller

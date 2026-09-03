@@ -47,12 +47,24 @@ impl<'a> MystWriter<'a> {
         }
     }
 
+    /// Frontmatter is mapped field-by-field via
+    /// [`crate::frontmatter::quarto_to_myst`] (reference §8.4) —
+    /// `jupyter`/`engine` -> `kernelspec`, `format` -> `exports`, etc.
+    /// Applying this unconditionally is correct for this writer's only
+    /// current caller ([`crate::pipeline::convert_quarto_to_myst_batch`],
+    /// always Quarto-sourced); for a same-dialect MyST->MyST round trip
+    /// (this writer's other documented use, see this module's docs) it is a
+    /// no-op, since a genuine MyST source document has no `jupyter`/`format`/
+    /// `engine`/`crossref.eq-prefix` keys for it to touch.
     #[must_use]
-    pub fn write(&self, doc: &Document) -> String {
+    pub fn write(&self, doc: &Document) -> (String, Vec<crate::config::ConfigWarning>) {
         let mut out = String::new();
+        let mut warnings = Vec::new();
         if let Some(fm) = &doc.frontmatter {
+            let (mapped, fm_warnings) = crate::frontmatter::quarto_to_myst(fm);
+            warnings = fm_warnings;
             out.push_str("---\n");
-            out.push_str(&fm.raw);
+            out.push_str(&mapped);
             out.push_str("---\n");
         }
         for (i, block) in doc.blocks.iter().enumerate() {
@@ -70,7 +82,7 @@ impl<'a> MystWriter<'a> {
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        out
+        (out, warnings)
     }
 
     fn rewrite(&self, lines: &[String]) -> Vec<String> {
@@ -484,8 +496,38 @@ mod tests {
         let doc = reader.read_str(input).unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let out = writer.write(&doc);
+        let (out, _) = writer.write(&doc);
         assert_eq!(out, input);
+    }
+
+    /// Proves the writer actually calls
+    /// `crate::frontmatter::quarto_to_myst` — `jupyter` must become
+    /// `kernelspec` in the rendered `.md` text.
+    #[test]
+    fn jupyter_frontmatter_is_mapped_to_kernelspec_by_the_writer() {
+        let raw = "title: Sample\njupyter: python3\n";
+        let doc = Document {
+            frontmatter: Some(crate::ir::Frontmatter {
+                raw: raw.to_string(),
+                parsed: crate::YamlValue::Mapping(
+                    crate::yaml::parse_mapping(raw).expect("valid YAML"),
+                ),
+            }),
+            blocks: vec![block(
+                BlockKind::Paragraph {
+                    lines: vec!["Body.".to_string()],
+                },
+                0,
+            )],
+            source: "a.md".into(),
+            engine: Some(Engine::Jupyter),
+        };
+        let restore = RestoreMap::new();
+        let writer = MystWriter::new(&restore, Vec::new());
+        let (out, _) = writer.write(&doc);
+        assert!(out.contains("kernelspec:"));
+        assert!(out.contains("name: python3"));
+        assert!(!out.contains("jupyter:"));
     }
 
     #[test]
@@ -503,7 +545,7 @@ mod tests {
         };
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let out = writer.write(&doc);
+        let (out, _) = writer.write(&doc);
         assert_eq!(out.trim(), "See [@smith2020] here.");
         assert!(!out.contains("{cite}"));
     }
@@ -519,7 +561,7 @@ mod tests {
         let doc = reader.read_str(text).unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let out = writer.write(&doc);
+        let (out, _) = writer.write(&doc);
         for legacy in [
             "{cite}", "{cite:t}", "{cite:p}", "{numref}", "{ref}", "{eq}", "{doc}",
         ] {
@@ -552,7 +594,7 @@ mod tests {
             Label::new("fig:samples"),
         );
         let writer = MystWriter::new(&restore, Vec::new());
-        let out = writer.write(&doc);
+        let (out, _) = writer.write(&doc);
         assert!(out.contains(":label: fig:samples"));
     }
 
@@ -569,7 +611,7 @@ mod tests {
             .unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let out = writer.write(&doc);
+        let (out, _) = writer.write(&doc);
         assert_eq!(out.trim(), "% restored comment");
     }
 }

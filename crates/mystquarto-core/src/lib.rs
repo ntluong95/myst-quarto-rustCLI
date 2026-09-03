@@ -1,10 +1,12 @@
 //! Core types for the `mystquarto` Rust port: the `mappings.toml`
 //! conversion contract, the document IR, leaf types (`Span`, `Label`), YAML
 //! strategy, MyST/Quarto readers, IR->text writers, label normalization
-//! (`registry`), notebook cell relabelling, and batch conversion
-//! (`pipeline`).
+//! (`registry`), notebook cell relabelling, batch conversion (`pipeline`),
+//! and project/page config mapping (`config`, `frontmatter`).
 #![forbid(unsafe_code)]
 
+pub mod config;
+pub mod frontmatter;
 pub mod fs;
 pub mod ir;
 pub mod label;

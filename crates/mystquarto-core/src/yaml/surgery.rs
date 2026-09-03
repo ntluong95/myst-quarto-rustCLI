@@ -157,6 +157,34 @@ fn finalize(current: &mut Option<InProgress>, segments: &mut Vec<Segment>) {
     }
 }
 
+/// True if `line` — already known to be a top-level `key: ...` line — opens
+/// a YAML block scalar (`|` or `>`, with an optional chomping indicator
+/// `-`/`+` and/or an explicit indentation digit, in either order, optionally
+/// followed by a comment). Once inside one, every following line — blank or
+/// indented — belongs to its content until a non-blank, unindented line
+/// appears (YAML block scalars are indentation-delimited; a blank line,
+/// even a zero-width one between paragraphs, never ends one). Without
+/// tracking this, [`segment_text`] would treat a blank line inside a
+/// multi-paragraph `abstract: |` as the top-level blank/comment separator
+/// it is everywhere else, splitting the scalar's tail into its own
+/// keyless segment that a later edit on a *different* key could delete.
+fn is_block_scalar_opener(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    let Some(colon) = trimmed.find(':') else {
+        return false;
+    };
+    let rest = trimmed[colon + 1..].trim_start();
+    let mut chars = rest.chars();
+    match chars.next() {
+        Some('|' | '>') => {}
+        _ => return false,
+    }
+    let indicator_part = chars.as_str().split('#').next().unwrap_or("").trim();
+    indicator_part
+        .chars()
+        .all(|c| c == '-' || c == '+' || c.is_ascii_digit())
+}
+
 fn segment_text(text: &str) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     // Comment/blank lines seen since the last segment was finalized, not
@@ -166,10 +194,26 @@ fn segment_text(text: &str) -> Vec<Segment> {
     // keyless segment.
     let mut pending_leading: Vec<String> = Vec::new();
     let mut current: Option<InProgress> = None;
+    // `true` from the line after a block-scalar-opening key line until a
+    // non-blank, unindented line ends it — see `is_block_scalar_opener`.
+    let mut in_block_scalar = false;
 
     for line in text.lines() {
+        if in_block_scalar {
+            let is_blank = line.trim().is_empty();
+            let is_indented = line.starts_with(' ') || line.starts_with('\t');
+            if is_blank || is_indented {
+                if let Some(seg) = current.as_mut() {
+                    seg.continuation.push(line.to_string());
+                }
+                continue;
+            }
+            in_block_scalar = false;
+        }
+
         if let Some(key) = top_level_key(line) {
             finalize(&mut current, &mut segments);
+            in_block_scalar = is_block_scalar_opener(line);
             current = Some(InProgress {
                 leading: std::mem::take(&mut pending_leading),
                 key,
@@ -435,6 +479,34 @@ mod tests {
             apply_edits(original, &edits),
             Err(SurgeryError::KeyNotFound("nope".to_string()))
         );
+    }
+
+    #[test]
+    fn blank_line_inside_block_scalar_survives_an_unrelated_key_removal() {
+        // Regression: a blank line between paragraphs of a multi-paragraph
+        // `abstract: |` used to be misread as the top-level separator
+        // between keys, splitting the second paragraph into its own
+        // segment that got silently deleted by an edit on a later key.
+        let original = "title: Foo\nabstract: |\n  First paragraph.\n\n  Second paragraph.\nkernelspec:\n  name: python3\n";
+        let edits = [FrontmatterEdit::Remove {
+            key: "kernelspec".to_string(),
+        }];
+        let out = apply_edits(original, &edits).expect("edit applies");
+        assert_eq!(
+            out,
+            "title: Foo\nabstract: |\n  First paragraph.\n\n  Second paragraph.\n"
+        );
+    }
+
+    #[test]
+    fn blank_line_inside_folded_block_scalar_survives_an_unrelated_key_removal() {
+        let original =
+            "title: Foo\nsummary: >\n  First.\n\n  Second.\nkernelspec:\n  name: python3\n";
+        let edits = [FrontmatterEdit::Remove {
+            key: "kernelspec".to_string(),
+        }];
+        let out = apply_edits(original, &edits).expect("edit applies");
+        assert_eq!(out, "title: Foo\nsummary: >\n  First.\n\n  Second.\n");
     }
 
     #[test]

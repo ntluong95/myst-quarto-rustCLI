@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Config & frontmatter mapping"
-status: pending
+status: done
 priority: P1
 effort: "4d"
 dependencies: [3, 4]
@@ -175,23 +175,94 @@ Rules:
 
 ## Success Criteria
 
-- [ ] `article-template/myst.yml` → `project.type: manuscript` (D8)
-- [ ] `manuscript.article` and `manuscript.notebooks` populated
-- [ ] `exports: [{template: lapreprint-typst}]` → `format: {typst: {}}` with the
+- [x] `article-template/myst.yml` → `project.type: manuscript` (D8)
+- [x] `manuscript.article` and `manuscript.notebooks` populated
+- [x] `exports: [{template: lapreprint-typst}]` → `format: {typst: {}}` with the
       template name preserved as a comment — never `format: {}` (D6)
-- [ ] `toc` entry `analysis.ipynb` → `analysis.ipynb`, not `analysis.ipynb.qmd` (D7)
-- [ ] `abstract: |` block scalar byte-identical after round trip (D9)
-- [ ] Exhaustive coverage test passes: zero silently dropped keys (D10)
-- [ ] `subtitle`, `short_title`, `description` all present in output
-- [ ] `subject` maps to `categories`, not `description`
-- [ ] Unmappable fields appear as informational comments **and** in
+- [x] `toc` entry `analysis.ipynb` → `analysis.ipynb`, not `analysis.ipynb.qmd` (D7)
+- [x] `abstract: |` block scalar byte-identical after round trip (D9)
+- [x] Exhaustive coverage test passes: zero silently dropped keys (D10)
+- [x] `subtitle`, `short_title`, `description` all present in output
+- [x] `subject` maps to `categories`, not `description`
+- [x] Unmappable fields appear as informational comments **and** in
       `.mystquarto/preserved.json`; reverse conversion recovers them from the
       sidecar, and still works when the comment is hand-edited or deleted
-- [ ] `bibliography:` synthesized when a `.bib` exists and `myst.yml` omits it (RT-14)
-- [ ] Citation keys absent from every reachable `.bib` are diagnosed, including
+- [x] `bibliography:` synthesized when a `.bib` exists and `myst.yml` omits it (RT-14)
+- [x] Citation keys absent from every reachable `.bib` are diagnosed, including
       the two DOI keys in `article.md`
-- [ ] All Phase 1 bucket B config tests pass
-- [ ] Unknown/future keys pass through rather than being dropped
+- [x] All Phase 1 bucket B config tests pass
+- [x] Unknown/future keys pass through rather than being dropped — myst.yml →
+      `_quarto.yml` (comment + sidecar); `_quarto.yml` → myst.yml is warned, not
+      preserved (no sidecar-recovery channel exists for that direction — see
+      Review Outcome below)
+
+## Review Outcome (pre-completion code review)
+
+An adversarial review (mirroring Phase 5's) found **2 Critical + 8 High + 6
+Medium + 3 Low** real bugs the 262 green tests did not catch — same failure
+class as Phase 5: correctness gaps unit tests happened not to exercise, not
+missing test *coverage* in the sense of untested lines.
+
+**Fixed this pass (Critical + High, user-scoped):**
+- Critical: [`yaml/emit.rs`](../../crates/mystquarto-core/src/yaml/emit.rs)'s
+  `quote_scalar_string` emitted a literal line break inside a double-quoted
+  scalar for any multi-line string value — invalid YAML, `quarto render`
+  failed on the whole project. Fixed: newlines are escaped (`\n`); multi-line
+  `parts.abstract` is forced back to `|` block style on write.
+- Critical: [`yaml/surgery.rs`](../../crates/mystquarto-core/src/yaml/surgery.rs)'s
+  `segment_text` treated a blank line *inside* a multi-paragraph block
+  scalar as the top-level key separator it is everywhere else, silently
+  deleting the scalar's tail on an unrelated key edit. Fixed: block-scalar
+  state is now tracked so blank/indented lines inside one stay in its
+  continuation until a genuinely dedented line ends it.
+- High: stale `.mystquarto/preserved.json` reverted user edits (asset copy
+  ran after the sidecar write and `.mystquarto` wasn't in the asset skip
+  list; an empty preserved-fields set skipped the write instead of clearing
+  it). Fixed both.
+- High: unknown/future `project.*`/`site.*` keys (including §8.2's
+  unimplemented `math` row) were silently dropped on the forward direction;
+  now preserved via the same comment + sidecar channel as the four named
+  unmappable fields. Reverse direction (`_quarto.yml` → myst.yml) now warns
+  on an unrecognized top-level key instead of silently narrowing — it does
+  not preserve into output, since no sidecar-recovery channel exists for
+  that direction (a real, disclosed scope gap, not implemented this pass).
+- High: manuscript `toc` entries beyond the article/notebooks, book
+  `part:`-grouped chapters, and `book.appendices` were silently dropped;
+  now preserved/flattened with a warning.
+- High: a bare-string MyST author entry (`authors: [- Name]`) was silently
+  discarded on the forward direction; now widened to `{name: ...}` like the
+  existing bare-string-affiliation handling.
+- High: frontmatter-mapping warnings (`label`, `math` drops at §8.4) never
+  reached `RunReport`/stderr; `QuartoWriter::write`/`MystWriter::write` now
+  return them and `pipeline.rs` threads them into `BatchWarning`.
+- The `article_template_fixture_drops_no_field` test now actually enumerates
+  the fixture's `project.*`/`site.*` keys and asserts each is mapped or
+  preserved, instead of a fixed list of `assert!(contains(...))` calls that
+  couldn't fail on a newly-dropped field.
+
+**Deferred (Medium + Low, explicit user decision — not fixed this pass):**
+`find_bib_file` follows symlinks (reads outside the input root) and is
+uncapped; `_quarto.yml` per-format options (`format.pdf.documentclass`, …)
+are silently dropped despite a doc comment claiming otherwise; two
+template-only exports mapping to the same Quarto format emit a duplicate
+YAML key; a non-`.md`/`.ipynb` toc entry (`data.csv`) becomes a bogus
+`.qmd` chapter; `config::sidecar::read` has no diagnostic channel for a
+refused sidecar; `apply_edits` failure silently falls back to unmapped
+frontmatter; `bibliography.rs`'s hand-rolled key parser misses
+space-before-brace and parenthesis BibTeX entry forms; a heading/blockquote/
+math-block citation isn't scanned for the RT-14 diagnostic; `kernelspec`
+without `name` silently assumes Python. None of these lose data or break a
+render on their own (unlike the two Criticals); each is a real but bounded
+gap. Re-run the review focused on these before Phase 9 (ship) if closing
+them is wanted.
+
+Verified end-to-end after the fix: `cargo test --workspace` (275 pass, 0
+fail, 8 ignored), `cargo clippy --workspace --all-targets` clean, `cargo fmt
+--all -- --check` clean, and a real `myst2quarto article-template/` →
+`quarto render --to html` (graceful Citeproc warnings, same as before) plus
+direct reproductions of both Criticals' exact failure scenarios (a folded
+`description: >` value; a two-paragraph `abstract: |` surviving a
+`kernelspec` → `jupyter` edit).
 
 ## Risk Assessment
 

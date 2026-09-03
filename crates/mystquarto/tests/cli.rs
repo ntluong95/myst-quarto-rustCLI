@@ -7,25 +7,11 @@
 //! `test_report_empty`, excluded — not this phase's to port). Every one of
 //! the 43 gets either a real port below, or an `#[ignore = "..."]`'d stub
 //! with a reason, grouped into `mod` blocks mirroring the Python test
-//! classes so the mapping is traceable class-by-class:
-//!
-//! - `warning_collector` (8 tests, all ignored): exercise Python's
-//!   `WarningCollector`, which has no Rust equivalent yet — that's Phase
-//!   7's diagnostics system, not this phase's file-orchestration/CLI scope.
-//! - `discover_files` (4 tests, all real): pure discovery, real this phase.
-//! - `convert_file` (5 tests: 2 real, 3 ignored): the 3 ignored need actual
-//!   transformed *content*, which `run_conversion` does not produce yet
-//!   (Phase 4/5).
-//! - `convert_directory` (12 tests: 6 real, 6 ignored): the real ones check
-//!   directory creation, path/extension computation, or asset copying —
-//!   all implemented this phase; the ignored ones need real converted
-//!   content or a real config file to exist.
-//! - `myst2quarto_cli` / `quarto2myst_cli` (5 tests: 1 real, 4 ignored):
-//!   the real one is a pure path-error case.
-//! - `cli_options` (6 tests: 1 real, 5 ignored): `--dry-run`'s "writes
-//!   nothing" is real; the rest need real converted content.
-//! - `main_subcommands` (3 tests: 1 real, 2 ignored): the no-subcommand
-//!   help-text case is real; the two conversions are not.
+//! classes so the mapping is traceable class-by-class. As of Phase 6, every
+//! group but one is fully real — only `warning_collector` (8 tests) is
+//! still ignored, since it exercises Python's `WarningCollector`, which has
+//! no Rust equivalent yet (Phase 7's diagnostics system, not any earlier
+//! phase's scope).
 //!
 //! Beyond the Python port, this file also proves (via the built binaries,
 //! black-box) the `--dry-run` zero-bytes guarantee across flag
@@ -355,10 +341,30 @@ mod convert_file {
         cleanup(&tmp);
     }
 
+    /// Ports `test_cli.py::TestConvertFile::test_convert_file_with_frontmatter`.
     #[test]
-    #[ignore = "needs Phase 6 frontmatter mapping (kernelspec -> jupyter is not this phase's \
-                scope — QuartoWriter passes frontmatter through verbatim, see crate::writer docs)"]
-    fn test_convert_file_with_frontmatter() {}
+    fn test_convert_file_with_frontmatter() {
+        let tmp = tempdir("convert-file-frontmatter");
+        fs::write(
+            tmp.join("doc.md"),
+            "---\ntitle: My Doc\nkernelspec:\n  name: python3\n---\n\n# Content\n",
+        )
+        .unwrap();
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        let content = fs::read_to_string(output_dir.join("doc.qmd")).unwrap();
+        assert!(content.contains("jupyter:"), "got:\n{content}");
+        assert!(!content.contains("kernelspec"), "got:\n{content}");
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_convert_file_nonexistent() {
@@ -406,13 +412,51 @@ mod convert_directory {
         cleanup(&tmp);
     }
 
+    /// Ports `test_cli.py::TestConvertDirectory::test_config_file_conversion`.
+    /// `myst_project`'s `myst.yml` has `site.template: book-theme`, so §8.1
+    /// infers `project.type: book` and places content under a `book:` block.
     #[test]
-    #[ignore = "needs Phase 6 config conversion (checks 'book' in parsed _quarto.yml)"]
-    fn test_config_file_conversion() {}
+    fn test_config_file_conversion() {
+        let tmp = tempdir("config-file-conversion");
+        myst_project(&tmp);
+        let output_dir = tmp.join("output");
 
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        let quarto_config = output_dir.join("_quarto.yml");
+        assert!(quarto_config.exists());
+        let content = fs::read_to_string(&quarto_config).unwrap();
+        assert!(content.contains("book"), "got:\n{content}");
+
+        cleanup(&tmp);
+    }
+
+    /// Ports `test_cli.py::TestConvertDirectory::test_quarto_config_file_conversion`.
     #[test]
-    #[ignore = "needs Phase 6 config conversion (checks 'project' in parsed myst.yml)"]
-    fn test_quarto_config_file_conversion() {}
+    fn test_quarto_config_file_conversion() {
+        let tmp = tempdir("quarto-config-file-conversion");
+        quarto_project(&tmp);
+        let output_dir = tmp.join("output");
+
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        let myst_config = output_dir.join("myst.yml");
+        assert!(myst_config.exists());
+        let content = fs::read_to_string(&myst_config).unwrap();
+        assert!(content.contains("project"), "got:\n{content}");
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_non_markdown_copied_as_assets() {
@@ -528,10 +572,9 @@ mod convert_directory {
             .output()
             .unwrap();
 
-        // --no-config: config-file conversion is Phase 6's scope (not yet
-        // implemented — see `test_config_only`'s ignore reason), so a
-        // directory run here would otherwise fail on `myst.yml` alone even
-        // though every content file converts correctly.
+        // --no-config: isolates this test to the --in-place content-file
+        // behavior under test (config conversion is covered separately by
+        // test_config_file_conversion / test_config_only).
         myst2quarto_cmd()
             .arg(&tmp)
             .arg("--in-place")
@@ -547,9 +590,27 @@ mod convert_directory {
         cleanup(&tmp);
     }
 
+    /// Ports `test_cli.py::TestConvertDirectory::test_config_only`.
     #[test]
-    #[ignore = "needs Phase 6 config conversion (checks _quarto.yml exists)"]
-    fn test_config_only() {}
+    fn test_config_only() {
+        let tmp = tempdir("config-only");
+        myst_project(&tmp);
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--config-only")
+            .assert()
+            .success();
+
+        assert!(output_dir.join("_quarto.yml").exists());
+        assert!(!output_dir.join("intro.qmd").exists());
+        assert!(!output_dir.join("methods.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_no_config() {
@@ -802,10 +863,9 @@ mod cli_options {
             .output()
             .unwrap();
 
-        // --no-config: config-file conversion is Phase 6's scope (not yet
-        // implemented — see `test_config_only`'s ignore reason), so a
-        // directory run here would otherwise fail on `myst.yml` alone even
-        // though every content file converts correctly.
+        // --no-config: isolates this test to the --in-place content-file
+        // behavior under test (config conversion is covered separately by
+        // test_config_file_conversion / test_config_only).
         myst2quarto_cmd()
             .arg(&tmp)
             .arg("--in-place")
@@ -839,9 +899,26 @@ mod cli_options {
         cleanup(&tmp);
     }
 
+    /// Ports `test_cli.py::TestCLIOptions::test_config_only`.
     #[test]
-    #[ignore = "needs Phase 6 config conversion (checks _quarto.yml exists)"]
-    fn test_config_only() {}
+    fn test_config_only() {
+        let tmp = tempdir("cli-options-config-only");
+        myst_project(&tmp);
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--config-only")
+            .assert()
+            .success();
+
+        assert!(output_dir.join("_quarto.yml").exists());
+        assert!(!output_dir.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_no_config() {
