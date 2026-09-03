@@ -1,0 +1,3 @@
+See the analysis output below.
+
+![Output of the regression analysis cell.](#nb:analysis)

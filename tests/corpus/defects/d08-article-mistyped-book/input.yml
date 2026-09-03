@@ -1,0 +1,6 @@
+project:
+  title: Sample Article
+  toc:
+    - file: article.md
+site:
+  template: article-theme

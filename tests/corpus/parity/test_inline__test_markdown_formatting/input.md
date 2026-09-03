@@ -1,0 +1,1 @@
+Some **bold** and *italic* text.

@@ -1,0 +1,1 @@
+See {numref}`Figure %s <fig-results>`.

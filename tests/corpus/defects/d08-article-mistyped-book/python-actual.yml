@@ -1,0 +1,6 @@
+project:
+  type: book
+book:
+  title: Sample Article
+  chapters:
+  - article.qmd

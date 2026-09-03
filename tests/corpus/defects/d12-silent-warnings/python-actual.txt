@@ -1,0 +1,9 @@
+Command: uv run myst2quarto tests/corpus/defects/d12-silent-warnings/input_dir -o /tmp/d12-out --strict
+Exit code: 0
+
+--- stdout+stderr ---
+Converted 1 file(s).
+
+--- resulting /tmp/d12-out/_quarto.yml ---
+title: Sample Article
+description: Statistics

@@ -1,0 +1,15 @@
+project:
+  title: Sample Article
+  subtitle: A Study in Regression
+  short_title: Sample
+  id: proj-001
+  description: The canonical project description.
+  subject: Statistics
+  open_access: true
+  venue: Journal of Examples
+  banner: banner.png
+  abbreviations:
+    CRISPR: Clustered Regularly Interspaced Short Palindromic Repeats
+  downloads: []
+site:
+  template: article-theme

@@ -1,0 +1,1 @@
+Results ({cite:p}`smith2020`).

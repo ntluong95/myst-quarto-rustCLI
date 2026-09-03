@@ -1,0 +1,7 @@
+project:
+  type: book
+book:
+  title: Sample Book
+  chapters:
+  - intro.qmd
+  - analysis.ipynb.qmd

@@ -1,0 +1,7 @@
+project:
+  title: Sample Book
+  toc:
+    - file: intro.md
+    - file: analysis.ipynb
+site:
+  template: book-theme

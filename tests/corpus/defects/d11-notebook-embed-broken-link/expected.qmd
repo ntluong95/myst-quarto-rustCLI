@@ -1,0 +1,3 @@
+See the analysis output below.
+
+{{< embed analysis.ipynb#fig-analysis-output >}}

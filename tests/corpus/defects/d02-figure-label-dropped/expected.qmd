@@ -1,0 +1,1 @@
+![Sample distribution across sites.](images/samples.png){#fig-samples width="80%"}

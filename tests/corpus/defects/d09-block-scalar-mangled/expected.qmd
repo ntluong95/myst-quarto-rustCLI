@@ -1,0 +1,9 @@
+---
+title: Sample Article
+abstract: |
+  This is a multi-line abstract
+  with a hard line break preserved
+  by the block literal style.
+---
+
+Body content here.
