@@ -1,0 +1,6 @@
+# Pins the exact toolchain used to develop and CI this workspace. Matches the
+# `rust-version` (MSRV) declared in each crate's Cargo.toml; bump both
+# together if a newer toolchain is adopted.
+[toolchain]
+channel = "1.94.1"
+components = ["clippy", "rustfmt"]

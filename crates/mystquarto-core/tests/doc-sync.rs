@@ -96,7 +96,12 @@ fn render_config_field() -> String {
         })
         .collect();
     render_table(
-        &["`myst.yml` field", "`_quarto.yml` field", "Fidelity", "Note"],
+        &[
+            "`myst.yml` field",
+            "`_quarto.yml` field",
+            "Fidelity",
+            "Note",
+        ],
         &rows,
     )
 }
@@ -132,7 +137,13 @@ fn render_legacy_role() -> String {
         })
         .collect();
     render_table(
-        &["Legacy construct", "Modern MyST", "Quarto", "Fidelity", "Note"],
+        &[
+            "Legacy construct",
+            "Modern MyST",
+            "Quarto",
+            "Fidelity",
+            "Note",
+        ],
         &rows,
     )
 }
@@ -184,6 +195,7 @@ fn sections_match(rendered: &str, committed: &str) -> bool {
 }
 
 #[test]
+#[allow(clippy::type_complexity)] // a fixed-size array of (section id, renderer fn) pairs; a named alias would add indirection without adding clarity here
 fn mappings_toml_matches_committed_doc() {
     let sections: [(&str, fn() -> String); 6] = [
         ("directive", render_directive),
