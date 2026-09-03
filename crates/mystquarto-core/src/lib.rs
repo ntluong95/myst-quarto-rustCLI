@@ -4,6 +4,7 @@
 //! the file orchestration contract are later phases' responsibility.
 #![forbid(unsafe_code)]
 
+pub mod fs;
 pub mod ir;
 pub mod label;
 pub mod mappings;

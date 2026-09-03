@@ -10,3 +10,4 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8.23"
 saphyr = "0.0.12"
 saphyr-parser = "0.0.12"
+thiserror = "2"
