@@ -76,7 +76,7 @@ carries the distribution and performance win.
 | # | Phase | Status | Depends on |
 |---|-------|--------|-----------|
 | 1 | [Preconditions, baseline audit & defect corpus](./phase-01-baseline-audit.md) | Done | — |
-| 2 | [Dialect reference & conversion contract](./phase-02-dialect-reference.md) | Pending | 1 |
+| 2 | [Dialect reference & conversion contract](./phase-02-dialect-reference.md) | Done | 1 |
 | 3 | [Rust core: workspace, IR, YAML, orchestration contract](./phase-03-rust-core.md) | Pending | 2 |
 | 4 | [Readers: MyST + Quarto → IR](./phase-04-readers.md) | Pending | 3 |
 | 5 | [Writers: IR → MyST + Quarto, label normalization](./phase-05-writers.md) | Pending | 4 |

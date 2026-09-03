@@ -51,41 +51,67 @@ attributes or `#|` cell comments.
 
 ## 2. Block constructs
 
-| Construct | MyST | Quarto | Fidelity | Notes |
-|---|---|---|---|---|
-| Executable cell | ```` ```{code-cell} python ```` | ```` ```{python} ```` | ✅ | Language moves from argument to fence label |
-| Cell — hide input | `:tags: [remove-input]` | `#\| echo: false` | ✅ | |
-| Cell — hide output | `:tags: [remove-output]` | `#\| output: false` | ✅ | |
-| Cell — hide both | `:tags: [remove-cell]` | `#\| include: false` | ✅ | |
-| Cell — fold input | `:tags: [hide-input]` | `#\| code-fold: true` | ⚠️ | MyST hides; Quarto collapses. Not identical UX |
-| Cell — caption | `:caption: text` | `#\| fig-cap: "text"` | ✅ | |
-| Cell — label | `:label: fig:x` | `#\| label: fig-x` | ✅ | Subject to §3 normalization |
-| Static code | ```` ```{code} python ```` + `:filename:` `:linenos:` | ```` ```python ```` + `{filename="…"}` | ⚠️ | `:linenos:`/`:emphasize-lines:` have partial Quarto analogues (`code-line-numbers`) |
-| Figure | `` :::{figure} path `` + `:label:` `:width:` `:alt:` `:align:` | `![caption](path){#fig-id width="X"}` | ✅ | Multi-paragraph captions require Quarto's div form |
-| Figure (div form) | ➖ | `::: {#fig-id}` … `:::` | ⚠️ | Required when caption is multi-block; reader must accept it |
-| Image (no caption) | `` ```{image} url `` + `:alt:` `:width:` | `![alt](url){width="X"}` | ✅ | |
-| Table + caption | `` :::{table} `` + `:label:` + caption paragraph + pipe table | pipe table + `: Caption {#tbl-id}` | ✅ | Caption is the directive **body** in MyST, a trailing line in Quarto |
-| `list-table` / `csv-table` | `` ```{list-table} ``, `` ```{csv-table} `` | ➖ | ❌ | No Quarto equivalent. Render to a pipe table + warn |
-| Math (labelled) | `` ```{math} `` + `:label: eq:x` | `$$ … $$ {#eq-x}` | ✅ | |
-| Math (unlabelled) | `$$ … $$` | `$$ … $$` | ✅ | Identical |
-| Inline math | `$x$` | `$x$` | ✅ | Identical |
-| Admonition (typed) | `` ```{note} ``, `{warning}`, `{tip}`, `{important}`, `{caution}` | `::: {.callout-note}` … | ✅ | Only these five overlap |
-| Admonition (MyST-only) | `{danger}`, `{error}`, `{hint}`, `{seealso}`, `{attention}` | ➖ | ⚠️ | Collapse to nearest of the five: `danger`/`error`→`important`, `hint`/`seealso`/`attention`→`note`. **Lossy — warn** |
-| Admonition (custom title) | `` ```{admonition} My Title `` | `::: {.callout-note title="My Title"}` | ✅ | |
-| Admonition (collapsible) | `:class: dropdown` + `:open:` | `collapse="true"` / `collapse="false"` | ⚠️ | Inverted polarity: MyST `:open:` true ≙ Quarto `collapse="false"` |
-| Tabs | `::::{tab-set}` / `:::{tab-item} Label` | `::: {.panel-tabset}` / `## Label` | ⚠️ | Quarto uses **headings** as tab labels — round-trip collides with real headings at the same level |
-| Margin content | `` ```{margin} `` or `` ```{aside} `` | `::: {.column-margin}` | ✅ | MyST `{aside}` and `{margin}` both map here; reverse picks `{aside}` |
-| Blockquote + attribution | `` ```{blockquote} `` + `-- Author` | `> quote` + `> — Author` | ⚠️ | Quarto has no first-class attribution node |
-| Epigraph / pull-quote | `` ```{epigraph} ``, `` ```{pull-quote} `` | ➖ | ❌ | Warn + preserve |
-| Mermaid | `` ```{mermaid} `` | `` ```{mermaid} `` | ✅ | Identical fence |
-| iframe | `` ```{iframe} url `` | raw HTML | ⚠️ | Emit raw `<iframe>` + warn |
-| Include | `` ```{include} file.md `` | `{{< include _file.qmd >}}` | ⚠️ | See §7 — placement rules differ |
-| Notebook output embed | `:::{figure} #nb:cell-label` | `{{< embed nb.ipynb#fig-cell >}}` | ⚠️ | See §7 |
-| Bibliography placement | `` ```{bibliography} `` | ➖ (implicit, config-driven) | ⚠️ | Drop the directive; ensure `bibliography:` is set in config |
-| TOC placement | `` ```{tableofcontents} `` | ➖ (implicit, config-driven) | ⚠️ | Drop the directive |
-| Glossary | `` ```{glossary} `` | ➖ | ❌ | Warn + preserve |
-| Grid / card | `` ::::{grid} ``, `` :::{card} `` | `::: {.grid}` / `::: {.card}` | ⚠️ | Quarto classes are Bootstrap, not semantic. Approximate |
-| Proof / theorem | `` ```{prf:theorem} `` | `::: {#thm-x .theorem}` | ⚠️ | Requires Quarto `crossref` theorem config |
+Non-structural constructs — pure directive/attribute name swaps — are generated
+from `mappings.toml`'s `[[directive]]` rows below. Structural constructs
+(figure, table, `list-table`/`csv-table`, tab-set, include, notebook embed,
+blockquote attribution, iframe, proof/theorem, static code) need type-aware,
+hand-written transform code rather than a name swap; §2.1 lists them, and
+`mappings.toml`'s `[[structural]]` rows record only their fidelity class for
+Phase 7's diagnostics.
+
+<!-- generated: do not edit (directive) -->
+| MyST | Quarto | Fidelity | Note |
+|---|---|---|---|
+| code-cell | {python} | ✅ | Language moves from argument to fence label |
+| :tags: [remove-input] | #\| echo: false | ✅ |  |
+| :tags: [remove-output] | #\| output: false | ✅ |  |
+| :tags: [remove-cell] | #\| include: false | ✅ |  |
+| :tags: [hide-input] | #\| code-fold: true | ⚠️ | MyST hides; Quarto collapses. Not identical UX |
+| :caption: text | #\| fig-cap: "text" | ✅ |  |
+| :label: fig:x | #\| label: fig-x | ✅ | Subject to §3 normalization |
+| {image} url + :alt: :width: | ![alt](url){width="X"} | ✅ |  |
+| {math} + :label: eq:x | $$ … $$ {#eq-x} | ✅ |  |
+| $$ … $$ | $$ … $$ | ✅ | Identical |
+| $x$ | $x$ | ✅ | Identical |
+| note | callout-note | ✅ | Only these five overlap |
+| warning | callout-warning | ✅ | Only these five overlap |
+| tip | callout-tip | ✅ | Only these five overlap |
+| important | callout-important | ✅ | Only these five overlap |
+| caution | callout-caution | ✅ | Only these five overlap |
+| danger | callout-important | ⚠️ | Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn |
+| error | callout-important | ⚠️ | Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn |
+| hint | callout-note | ⚠️ | Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn |
+| seealso | callout-note | ⚠️ | Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn |
+| attention | callout-note | ⚠️ | Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn |
+| admonition (custom title) | callout-note title="My Title" | ✅ |  |
+| :class: dropdown + :open: | collapse="true" / collapse="false" | ⚠️ | Inverted polarity: MyST :open: true ≙ Quarto collapse="false" |
+| margin | column-margin | ✅ | MyST {aside} and {margin} both map here; reverse picks {aside} |
+| aside | column-margin | ✅ | MyST {aside} and {margin} both map here; reverse picks {aside} |
+| epigraph | — | ❌ | Warn + preserve |
+| pull-quote | — | ❌ | Warn + preserve |
+| mermaid | mermaid | ✅ | Identical fence |
+| bibliography | — | ⚠️ | Drop the directive; ensure bibliography: is set in config |
+| tableofcontents | — | ⚠️ | Drop the directive |
+| glossary | — | ❌ | Warn + preserve |
+| grid | grid | ⚠️ | Quarto classes are Bootstrap, not semantic. Approximate |
+| card | card | ⚠️ | Quarto classes are Bootstrap, not semantic. Approximate |
+<!-- end generated (directive) -->
+
+### 2.1 Structural constructs (hand-written transforms)
+
+| Construct | Fidelity | Notes |
+|---|---|---|
+| Static code | ⚠️ | `` ```{code} python `` + `:filename:` `:linenos:` → `` ```python `` + `{filename="…"}`. `:linenos:`/`:emphasize-lines:` have partial Quarto analogues (`code-line-numbers`) |
+| Figure | ✅ | `` :::{figure} path `` + `:label:` `:width:` `:alt:` `:align:` → `![caption](path){#fig-id width="X"}`. Multi-paragraph captions require Quarto's div form |
+| Figure (div form) | ⚠️ | ➖ → `::: {#fig-id}` … `:::`. Required when caption is multi-block; reader must accept it |
+| Table + caption | ✅ | `` :::{table} `` + `:label:` + caption paragraph + pipe table → pipe table + `: Caption {#tbl-id}`. Caption is the directive **body** in MyST, a trailing line in Quarto |
+| `list-table` / `csv-table` | ❌ | `` ```{list-table} ``, `` ```{csv-table} `` → ➖. No Quarto equivalent. Render to a pipe table + warn |
+| Tabs | ⚠️ | `::::{tab-set}` / `:::{tab-item} Label` → `::: {.panel-tabset}` / `## Label`. Quarto uses **headings** as tab labels — round-trip collides with real headings at the same level |
+| Blockquote + attribution | ⚠️ | `` ```{blockquote} `` + `-- Author` → `> quote` + `> — Author`. Quarto has no first-class attribution node |
+| iframe | ⚠️ | `` ```{iframe} url `` → raw HTML. Emit raw `<iframe>` + warn |
+| Include | ⚠️ | `` ```{include} file.md `` → `{{< include _file.qmd >}}`. See §7 — placement rules differ |
+| Notebook output embed | ⚠️ | `:::{figure} #nb:cell-label` → `{{< embed nb.ipynb#fig-cell >}}`. See §7 |
+| Proof / theorem | ⚠️ | `` ```{prf:theorem} `` → `::: {#thm-x .theorem}`. Requires Quarto `crossref` theorem config |
 
 ---
 
@@ -119,10 +145,37 @@ in the `article-template` fixture is currently emitted broken.**
 ### 3.3 Prefix rules — the incompatibility
 
 **Quarto requires** the identifier to begin with a registered type prefix,
-hyphen-separated, and rejects colons:
+hyphen-separated, and rejects colons. The colon-prefix (MyST) → hyphen-prefix
+(Quarto) rule for each registered prefix, plus the `tab:`→`tbl-` exception
+(§3.4) and the general `_`→`-` rule, is generated from `mappings.toml`'s
+`[[label_prefix]]` rows below.
 
-`fig-` `tbl-` `eq-` `sec-` `lst-` `thm-` `lem-` `cor-` `prp-` `cnj-` `def-`
-`exm-` `exr-` `sol-` `rem-` `alg-` `tip-` `nte-` `wrn-` `imp-` `cau-`
+<!-- generated: do not edit (label_prefix) -->
+| MyST prefix | Quarto prefix | Fidelity | Note |
+|---|---|---|---|
+| fig: | fig- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| eq: | eq- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| sec: | sec- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| lst: | lst- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| thm: | thm- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| lem: | lem- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| cor: | cor- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| prp: | prp- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| cnj: | cnj- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| def: | def- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| exm: | exm- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| exr: | exr- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| sol: | sol- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| rem: | rem- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| alg: | alg- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| tip: | tip- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| nte: | nte- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| wrn: | wrn- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| imp: | imp- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| cau: | cau- | ⚠️ | Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion |
+| tab: | tbl- | ⚠️ | Exception: tab: → tbl- (not tab-), per §3.4 |
+| _ | - | ⚠️ | _ → - in labels; Quarto warns against _ in IDs (breaks LaTeX/PDF) |
+<!-- end generated (label_prefix) -->
 
 Quarto also warns against `_` in IDs (breaks LaTeX/PDF).
 **MyST imposes no constraint** — `fig:samples`, `my-figure`, and `x1` are all valid.
@@ -199,24 +252,31 @@ resolution, not as sequential regex substitutions. The DOI-as-key form
 
 ## 5. Inline constructs
 
-| Construct | MyST | Quarto | Fidelity |
+Role-syntax constructs (`` {name}`...` ``) are generated from `mappings.toml`'s
+`[[role]]` rows; plain-syntax constructs that are identical or near-identical
+between the two dialects come from `[[inline]]` rows. Both are rendered into
+one table, role rows first.
+
+<!-- generated: do not edit (inline) -->
+| MyST | Quarto | Fidelity | Note |
 |---|---|---|---|
-| Inline eval (Python) | `` {eval}`expr` `` | `` `{python} expr` `` | ✅ |
-| Inline eval (R, Jupyter) | `` {eval}`expr` `` | `` `{r} expr` `` | ✅ |
-| Inline eval (R, knitr) | ➖ | `` `r expr` `` | ❌ **knitr-only.** See §6 |
-| Abbreviation | `` {abbr}`CRISPR (Clustered…)` `` or project `abbreviations:` | ➖ | ❌ Emit raw `<abbr>` + warn |
-| Strikethrough | `` {del}`x` `` or `~~x~~` | `~~x~~` | ✅ |
-| Underline | `` {u}`x` `` | `[x]{.underline}` | ✅ |
-| Small caps | `` {sc}`x` `` | `[x]{.smallcaps}` | ✅ |
-| Subscript | `` {sub}`x` `` or `~x~` | `~x~` | ✅ |
-| Superscript | `` {sup}`x` `` or `^x^` | `^x^` | ✅ |
-| Keyboard | `` {kbd}`Ctrl-C` `` | `[Ctrl-C]{.kbd}` | ⚠️ No Quarto semantic |
-| Document link | `[text](./other.md)` | `[text](./other.qmd)` | ✅ Extension rewrite |
-| Legacy doc role | `` {doc}`path` `` | ➖ | read-only → `[path](path.qmd)` |
-| File link (empty text) | `[](./references.bib)` | `[references.bib](./references.bib)` | ⚠️ MyST auto-fills text; Quarto renders empty |
-| Footnote | `[^label]` + `[^label]: text` | `[^label]` + `[^label]: text` | ✅ identical |
-| Link ref definition | `[Label]: https://url` | `[Label]: https://url` | ✅ identical |
-| Line break | `\` at end of line | `\` at end of line | ✅ identical |
+| eval | `{python} expr` | ✅ | Python |
+| eval | `{r} expr` | ✅ | R, Jupyter kernel |
+| — | `r expr` | ❌ | knitr-only. See §6 |
+| abbr | — | ❌ | Emit raw <abbr> + warn |
+| del | ~~x~~ | ✅ | Also plain ~~x~~ syntax in MyST |
+| u | [x]{.underline} | ✅ |  |
+| sc | [x]{.smallcaps} | ✅ |  |
+| sub | ~x~ | ✅ | Also plain ~x~ syntax in MyST |
+| sup | ^x^ | ✅ | Also plain ^x^ syntax in MyST |
+| kbd | [Ctrl-C]{.kbd} | ⚠️ | No Quarto semantic |
+| doc | — | ❌ | read-only → [path](path.qmd) |
+| [text](./other.md) | [text](./other.qmd) | ✅ | Extension rewrite |
+| [](./references.bib) | [references.bib](./references.bib) | ⚠️ | MyST auto-fills text; Quarto renders empty |
+| [^label] + [^label]: text | [^label] + [^label]: text | ✅ | identical |
+| [Label]: https://url | [Label]: https://url | ✅ | identical |
+| \ at end of line | \ at end of line | ✅ | identical |
+<!-- end generated (inline) -->
 
 ---
 
@@ -308,53 +368,57 @@ Infer as follows (first match wins):
 
 ### 8.2 Field mapping
 
-| `myst.yml` (`project.*`) | `_quarto.yml` | Fidelity | Notes |
+<!-- generated: do not edit (config_field) -->
+| `myst.yml` field | `_quarto.yml` field | Fidelity | Note |
 |---|---|---|---|
-| `title` | `title` / `book.title` | ✅ | Location depends on project type |
-| `subtitle` | `subtitle` | ✅ | **Currently dropped** |
-| `short_title` | `\| short-title` (metadata) | ⚠️ | **Currently dropped** |
-| `description` | `description` | ✅ | **Currently dropped** — and `subject` wrongly overwrites it |
-| `subject` | `categories` | ⚠️ | Currently mapped to `description`, which is wrong |
-| `keywords` | `keywords` | ✅ | |
-| `authors[]` | `author[]` | ✅ | |
-| `authors[].name` | `author[].name` | ✅ | |
-| `authors[].orcid` | `author[].orcid` | ✅ | |
-| `authors[].email` | `author[].email` | ✅ | |
-| `authors[].affiliation` | `author[].affiliations[].name` | ⚠️ | MyST allows a bare string; Quarto wants a list of objects |
-| `authors[].roles` | `author[].roles` | ✅ | Both use CRediT |
-| `authors[].corresponding` | `author[].corresponding` | ✅ | |
-| `date` | `date` | ✅ | |
-| `license` | `license` | ✅ | |
-| `doi` | `doi` | ✅ | |
-| `github` | `repo-url` | ✅ | |
-| `bibliography` | `bibliography` | ✅ | |
-| `toc[].file` | `book.chapters[]` | ⚠️ | Extension rewrite must be **type-aware**: `.md`→`.qmd`, `.ipynb`→`.ipynb` (**unchanged**) |
-| `exports[]` | `format` | ⚠️ | See §8.3 |
-| `downloads[]` | `downloads` | ⚠️ | Partial analogue |
-| `banner` | `image` | ⚠️ | |
-| `thumbnail` | `image` | ⚠️ | Collides with `banner` — prefer `banner`, warn on both |
-| `abbreviations` | ➖ | ❌ | No Quarto feature. Preserve as comment |
-| `open_access` | ➖ | ❌ | Preserve as comment |
-| `venue` | ➖ | ❌ | Preserve as comment (journal templates may consume it) |
-| `funding` | `funding` | ⚠️ | Shapes differ |
-| `id` | ➖ | ❌ | Preserve as comment |
-| `math` (macros) | `include-in-header` LaTeX macros | ⚠️ | |
-| `numbering` | `number-sections` + `crossref` | ⚠️ | |
-| `site.template` | `format.html.theme` | ⚠️ | Theme names do not correspond |
-| ➖ | `manuscript.article` | ➖ | Derived from `exports[].article` |
+| title | title / book.title | ✅ | Location depends on project type |
+| subtitle | subtitle | ✅ | Currently dropped |
+| short_title | \| short-title (metadata) | ⚠️ | Currently dropped |
+| description | description | ✅ | Currently dropped — and subject wrongly overwrites it |
+| subject | categories | ⚠️ | Currently mapped to description, which is wrong |
+| keywords | keywords | ✅ |  |
+| authors[] | author[] | ✅ |  |
+| authors[].name | author[].name | ✅ |  |
+| authors[].orcid | author[].orcid | ✅ |  |
+| authors[].email | author[].email | ✅ |  |
+| authors[].affiliation | author[].affiliations[].name | ⚠️ | MyST allows a bare string; Quarto wants a list of objects |
+| authors[].roles | author[].roles | ✅ | Both use CRediT |
+| authors[].corresponding | author[].corresponding | ✅ |  |
+| date | date | ✅ |  |
+| license | license | ✅ |  |
+| doi | doi | ✅ |  |
+| github | repo-url | ✅ |  |
+| bibliography | bibliography | ✅ |  |
+| toc[].file | book.chapters[] | ⚠️ | Extension rewrite must be type-aware: .md→.qmd, .ipynb→.ipynb (unchanged) |
+| exports[] | format | ⚠️ | See §8.3 |
+| downloads[] | downloads | ⚠️ | Partial analogue |
+| banner | image | ⚠️ |  |
+| thumbnail | image | ⚠️ | Collides with banner — prefer banner, warn on both |
+| abbreviations | — | ❌ | No Quarto feature. Preserve as comment |
+| open_access | — | ❌ | Preserve as comment |
+| venue | — | ❌ | Preserve as comment (journal templates may consume it) |
+| funding | funding | ⚠️ | Shapes differ |
+| id | — | ❌ | Preserve as comment |
+| math (macros) | include-in-header LaTeX macros | ⚠️ |  |
+| numbering | number-sections + crossref | ⚠️ |  |
+| site.template | format.html.theme | ⚠️ | Theme names do not correspond |
+| — | manuscript.article | ❌ | Derived from exports[].article |
+<!-- end generated (config_field) -->
 
 ### 8.3 Exports ↔ formats
 
 MyST `exports` is a list of `{format\|template, …}`; Quarto `format` is a map.
 
-| MyST export | Quarto format |
-|---|---|
-| `- format: pdf` | `format: {pdf: {}}` |
-| `- format: docx` | `format: {docx: {}}` |
-| `- format: tex` | `format: {latex: {}}` |
-| `- format: jats` | `format: {jats: {}}` |
-| `- format: meca` | ➖ ❌ |
-| `- template: lapreprint-typst` | `format: {typst: {}}` ⚠️ template not portable |
+<!-- generated: do not edit (export_format) -->
+| MyST export | Quarto format | Fidelity | Note |
+|---|---|---|---|
+| - format: pdf | format: {pdf: {}} | ✅ |  |
+| - format: docx | format: {docx: {}} | ✅ |  |
+| - format: tex | format: {latex: {}} | ✅ |  |
+| - format: jats | format: {jats: {}} | ✅ |  |
+| - format: meca | — | ❌ |  |
+| - template: lapreprint-typst | format: {typst: {}} | ⚠️ | template not portable |
+<!-- end generated (export_format) -->
 
 An export entry with only a `template:` and no `format:` **currently produces
 `format: {}`**, which is invalid Quarto. The template must be inspected to infer
@@ -405,17 +469,19 @@ so the conversion is not perfectly faithful in that position.
 
 Accepted when reading MyST; never emitted.
 
-| Legacy construct | Modern MyST equivalent | Emitted as (Quarto) |
-|---|---|---|
-| `` {cite}`key` `` | `[@key]` | `[@key]` |
-| `` {cite:t}`key` `` | `@key` | `@key` |
-| `` {cite:p}`key` `` | `[@key]` | `[@key]` |
-| `` {numref}`fig-x` `` | `@fig-x` | `@fig-x` |
-| `` {numref}`Figure %s <fig-x>` `` | `[Figure %s](#fig-x)` | `[Fig @fig-x]` |
-| `` {ref}`label` `` | `@label` / `[](#label)` | `@label` |
-| `` {eq}`label` `` | `@eq-label` | `@eq-label` |
-| `` {doc}`path` `` | `[path](path.md)` | `[path](path.qmd)` |
-| `:name:` directive option | `:label:` | `{#id}` |
+<!-- generated: do not edit (legacy_role) -->
+| Legacy construct | Modern MyST | Quarto | Fidelity | Note |
+|---|---|---|---|---|
+| {cite}`key` | [@key] | [@key] | ✅ |  |
+| {cite:t}`key` | @key | @key | ✅ |  |
+| {cite:p}`key` | [@key] | [@key] | ✅ |  |
+| {numref}`fig-x` | @fig-x | @fig-x | ✅ |  |
+| {numref}`Figure %s <fig-x>` | [Figure %s](#fig-x) | [Fig @fig-x] | ⚠️ | Custom prefix text (%s) not preserved; Quarto emits a fixed 'Fig' prefix |
+| {ref}`label` | @label / [](#label) | @label | ✅ |  |
+| {eq}`label` | @eq-label | @eq-label | ✅ |  |
+| {doc}`path` | [path](path.md) | [path](path.qmd) | ✅ |  |
+| :name: directive option | :label: | {#id} | ✅ |  |
+<!-- end generated (legacy_role) -->
 
 ---
 

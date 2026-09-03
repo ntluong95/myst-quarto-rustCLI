@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Dialect reference & conversion contract"
-status: pending
+status: done
 priority: P1
 effort: "2d"
 dependencies: [1]
@@ -110,18 +110,50 @@ Phase 7 reads to decide whether to emit a diagnostic. Encoding it as data means
 
 ## Success Criteria
 
-- [ ] Step 0's surviving-row count and the resulting go/no-go are recorded here
-- [ ] **If the gate said go:** `mappings.toml` covers every row of §2, §3.4, §5,
+- [x] Step 0's surviving-row count and the resulting go/no-go are recorded here.
+      **Step 0 (controller, run before this phase's implementation work
+      started): counted survivable rows (pure `{from, to, fidelity}` name-swaps,
+      excluding structural transforms that need hand-written code — figure,
+      table, list-table/csv-table, tabset, include, notebook-embed,
+      blockquote-attribution, iframe, proof/theorem — and excluding §3.4, which
+      is worked examples of one algorithm, not row data) across §2, §5, §8.2,
+      §8.3 and §10 and got ~94 rows, comfortably over the ~40-row threshold,
+      matching this phase's own "~90 rows" estimate in the Risk Assessment
+      below. Decision: GO — build the `mappings.toml` pipeline as specified, do
+      not take the match-arms fallback.**
+- [x] **If the gate said go:** `mappings.toml` covers every row of §2, §3.4, §5,
       §8.2, §8.3, §10; `cargo test doc_sync` passes and demonstrably fails when a
-      table is hand-edited; regenerating the doc produces no diff on a clean tree
-- [ ] **If the gate said stop:** `match` arms in Rust, `docs/dialect-comparison.md`
-      unchanged, and Phases 6/7 amended to drop their `mappings.toml` dependency
-- [ ] Every mapping row carries a `fidelity` value and a `ref` back-pointer
-- [ ] Every conversion rule is **either** a `mappings.toml` row **or** a named
+      table is hand-edited; regenerating the doc produces no diff on a clean tree.
+      Verified: `mappings.toml` at the repo root transcribes §2 (33 non-structural
+      `[[directive]]` rows + 11 `[[structural]]` rows), §5 (11 `[[role]]` + 5
+      `[[inline]]` rows), §8.2 (32 `[[config_field]]` rows), §8.3 (6
+      `[[export_format]]` rows), §10 (9 `[[legacy_role]]` rows), and §3.3's
+      prefix-rule table, which the phase spec's own worked example identified as
+      the data half of §3.4 (22 `[[label_prefix]]` rows) — 129 rows total, 96 of
+      them the "survivable name-swap" rows the gate counted. `cargo test -p
+      mystquarto-core` passes 4/4 (2 unit tests in `mappings.rs`, 2 in
+      `doc-sync.rs`); temporarily corrupting a `mappings.toml` row and rerunning
+      made `mappings_toml_matches_committed_doc` fail as expected, then the
+      corruption was reverted and the suite passed again. Running
+      `uv run python scripts/render-mapping-tables.py` against the committed
+      `mappings.toml` and `docs/dialect-comparison.md` produces zero diff.
+- [ ] **If the gate said stop:** *(does not apply — the gate said GO; no
+      match-arms fallback was taken and `docs/dialect-comparison.md` was
+      intentionally restructured, not left unchanged, to host the generated
+      tables)*
+- [x] Every mapping row carries a `fidelity` value and a `ref` back-pointer
+- [x] Every conversion rule is **either** a `mappings.toml` row **or** a named
       transform whose fidelity and diagnostic code are declared in `mappings.toml`
       — the original "no rule absent from `mappings.toml`" was unachievable by
-      this phase's own design, since structural transforms stay hand-written
-- [ ] `toml` is present in Phase 3's dependency table
+      this phase's own design, since structural transforms stay hand-written.
+      The 11 `[[structural]]` rows record exactly this: name + fidelity + `ref`
+      for figure, figure (div form), table, list-table/csv-table, tab-set,
+      blockquote+attribution, iframe, include, notebook-embed, proof/theorem and
+      static code, with no `to` field, per the phase spec's own instruction.
+- [x] `toml` is present in Phase 3's dependency table. `crates/mystquarto-core/Cargo.toml`
+      pins `toml = "0.8.23"` (latest 0.8.x at the time this phase ran) plus
+      `serde` with the `derive` feature; Phase 3 inherits this from the
+      workspace member it will build out rather than re-adding it.
 
 ## Risk Assessment
 

@@ -1,0 +1,911 @@
+# mystquarto conversion contract
+#
+# Machine-readable transcription of docs/dialect-comparison.md's mapping
+# tables. Every conversion rule the implementation applies must trace to a
+# row in this file (directive/structural/role/inline) or a row in the
+# doc's prose sections that this file does not cover (§1, §4, §6, §7, §9,
+# §11, §12 — policy and rationale, not row-wise mappings).
+#
+# `fidelity` is one of "exact" | "lossy" | "unmappable", mapping the doc's
+# legend: ✅ -> exact, ⚠️ -> lossy, ❌ -> unmappable, ➖ (no equivalent,
+# warn+preserve) -> unmappable.
+#
+# `ref` cites the exact section this row was transcribed from.
+#
+# Regenerate the sentinel-bounded tables in docs/dialect-comparison.md with
+# `scripts/render-mapping-tables.py` (or `just regen-docs`) after editing
+# this file. crates/mystquarto-core/tests/doc-sync.rs fails the build if the
+# two drift apart.
+
+# ---------------------------------------------------------------------------
+# §2 Block constructs — non-structural rows (pure name/attribute swaps).
+# Structural constructs (figure, table, list-table/csv-table, tab-set,
+# include, notebook-embed, blockquote-attribution, iframe, proof/theorem,
+# static code) need hand-written transform code and are recorded below in
+# [[structural]] instead.
+# ---------------------------------------------------------------------------
+
+[[directive]]
+myst = "code-cell"
+quarto = "{python}"
+fidelity = "exact"
+note = "Language moves from argument to fence label"
+ref = "§2"
+
+[[directive]]
+myst = ":tags: [remove-input]"
+quarto = "#| echo: false"
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = ":tags: [remove-output]"
+quarto = "#| output: false"
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = ":tags: [remove-cell]"
+quarto = "#| include: false"
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = ":tags: [hide-input]"
+quarto = "#| code-fold: true"
+fidelity = "lossy"
+note = "MyST hides; Quarto collapses. Not identical UX"
+ref = "§2"
+
+[[directive]]
+myst = ":caption: text"
+quarto = "#| fig-cap: \"text\""
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = ":label: fig:x"
+quarto = "#| label: fig-x"
+fidelity = "exact"
+note = "Subject to §3 normalization"
+ref = "§2"
+
+[[directive]]
+myst = "{image} url + :alt: :width:"
+quarto = "![alt](url){width=\"X\"}"
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = "{math} + :label: eq:x"
+quarto = "$$ … $$ {#eq-x}"
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = "$$ … $$"
+quarto = "$$ … $$"
+fidelity = "exact"
+note = "Identical"
+ref = "§2"
+
+[[directive]]
+myst = "$x$"
+quarto = "$x$"
+fidelity = "exact"
+note = "Identical"
+ref = "§2"
+
+[[directive]]
+myst = "note"
+quarto = "callout-note"
+fidelity = "exact"
+note = "Only these five overlap"
+ref = "§2"
+
+[[directive]]
+myst = "warning"
+quarto = "callout-warning"
+fidelity = "exact"
+note = "Only these five overlap"
+ref = "§2"
+
+[[directive]]
+myst = "tip"
+quarto = "callout-tip"
+fidelity = "exact"
+note = "Only these five overlap"
+ref = "§2"
+
+[[directive]]
+myst = "important"
+quarto = "callout-important"
+fidelity = "exact"
+note = "Only these five overlap"
+ref = "§2"
+
+[[directive]]
+myst = "caution"
+quarto = "callout-caution"
+fidelity = "exact"
+note = "Only these five overlap"
+ref = "§2"
+
+[[directive]]
+myst = "danger"
+quarto = "callout-important"
+fidelity = "lossy"
+note = "Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn"
+ref = "§2"
+
+[[directive]]
+myst = "error"
+quarto = "callout-important"
+fidelity = "lossy"
+note = "Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn"
+ref = "§2"
+
+[[directive]]
+myst = "hint"
+quarto = "callout-note"
+fidelity = "lossy"
+note = "Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn"
+ref = "§2"
+
+[[directive]]
+myst = "seealso"
+quarto = "callout-note"
+fidelity = "lossy"
+note = "Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn"
+ref = "§2"
+
+[[directive]]
+myst = "attention"
+quarto = "callout-note"
+fidelity = "lossy"
+note = "Collapse to nearest of the five: danger/error→important, hint/seealso/attention→note. Lossy — warn"
+ref = "§2"
+
+[[directive]]
+myst = "admonition (custom title)"
+quarto = "callout-note title=\"My Title\""
+fidelity = "exact"
+ref = "§2"
+
+[[directive]]
+myst = ":class: dropdown + :open:"
+quarto = "collapse=\"true\" / collapse=\"false\""
+fidelity = "lossy"
+note = "Inverted polarity: MyST :open: true ≙ Quarto collapse=\"false\""
+ref = "§2"
+
+[[directive]]
+myst = "margin"
+quarto = "column-margin"
+fidelity = "exact"
+note = "MyST {aside} and {margin} both map here; reverse picks {aside}"
+ref = "§2"
+
+[[directive]]
+myst = "aside"
+quarto = "column-margin"
+fidelity = "exact"
+note = "MyST {aside} and {margin} both map here; reverse picks {aside}"
+ref = "§2"
+
+[[directive]]
+myst = "epigraph"
+fidelity = "unmappable"
+note = "Warn + preserve"
+ref = "§2"
+
+[[directive]]
+myst = "pull-quote"
+fidelity = "unmappable"
+note = "Warn + preserve"
+ref = "§2"
+
+[[directive]]
+myst = "mermaid"
+quarto = "mermaid"
+fidelity = "exact"
+note = "Identical fence"
+ref = "§2"
+
+[[directive]]
+myst = "bibliography"
+fidelity = "lossy"
+note = "Drop the directive; ensure bibliography: is set in config"
+ref = "§2"
+
+[[directive]]
+myst = "tableofcontents"
+fidelity = "lossy"
+note = "Drop the directive"
+ref = "§2"
+
+[[directive]]
+myst = "glossary"
+fidelity = "unmappable"
+note = "Warn + preserve"
+ref = "§2"
+
+[[directive]]
+myst = "grid"
+quarto = "grid"
+fidelity = "lossy"
+note = "Quarto classes are Bootstrap, not semantic. Approximate"
+ref = "§2"
+
+[[directive]]
+myst = "card"
+quarto = "card"
+fidelity = "lossy"
+note = "Quarto classes are Bootstrap, not semantic. Approximate"
+ref = "§2"
+
+# ---------------------------------------------------------------------------
+# §2 Structural constructs — need hand-written transform code (Phase 4/5).
+# Recorded here only so diagnostics (Phase 7) can look up their fidelity
+# class; no `quarto` target is captured since there is no name-swap.
+# ---------------------------------------------------------------------------
+
+[[structural]]
+myst = "code (static)"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "figure"
+fidelity = "exact"
+ref = "§2"
+
+[[structural]]
+myst = "figure (div form)"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "table"
+fidelity = "exact"
+ref = "§2"
+
+[[structural]]
+myst = "list-table/csv-table"
+fidelity = "unmappable"
+ref = "§2"
+
+[[structural]]
+myst = "tab-set"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "blockquote"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "iframe"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "include"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "notebook-embed"
+fidelity = "lossy"
+ref = "§2"
+
+[[structural]]
+myst = "prf:theorem"
+fidelity = "lossy"
+ref = "§2"
+
+# ---------------------------------------------------------------------------
+# §5 Inline constructs — role syntax (`` {name}`...` ``).
+# ---------------------------------------------------------------------------
+
+[[role]]
+myst = "eval"
+quarto = "`{python} expr`"
+fidelity = "exact"
+note = "Python"
+ref = "§5"
+
+[[role]]
+myst = "eval"
+quarto = "`{r} expr`"
+fidelity = "exact"
+note = "R, Jupyter kernel"
+ref = "§5"
+
+[[role]]
+quarto = "`r expr`"
+fidelity = "unmappable"
+note = "knitr-only. See §6"
+ref = "§5"
+
+[[role]]
+myst = "abbr"
+fidelity = "unmappable"
+note = "Emit raw <abbr> + warn"
+ref = "§5"
+
+[[role]]
+myst = "del"
+quarto = "~~x~~"
+fidelity = "exact"
+note = "Also plain ~~x~~ syntax in MyST"
+ref = "§5"
+
+[[role]]
+myst = "u"
+quarto = "[x]{.underline}"
+fidelity = "exact"
+ref = "§5"
+
+[[role]]
+myst = "sc"
+quarto = "[x]{.smallcaps}"
+fidelity = "exact"
+ref = "§5"
+
+[[role]]
+myst = "sub"
+quarto = "~x~"
+fidelity = "exact"
+note = "Also plain ~x~ syntax in MyST"
+ref = "§5"
+
+[[role]]
+myst = "sup"
+quarto = "^x^"
+fidelity = "exact"
+note = "Also plain ^x^ syntax in MyST"
+ref = "§5"
+
+[[role]]
+myst = "kbd"
+quarto = "[Ctrl-C]{.kbd}"
+fidelity = "lossy"
+note = "No Quarto semantic"
+ref = "§5"
+
+[[role]]
+myst = "doc"
+legacy = true
+fidelity = "unmappable"
+note = "read-only → [path](path.qmd)"
+ref = "§5"
+
+# ---------------------------------------------------------------------------
+# §5 Inline constructs — plain syntax, identical or near-identical.
+# ---------------------------------------------------------------------------
+
+[[inline]]
+myst = "[text](./other.md)"
+quarto = "[text](./other.qmd)"
+fidelity = "exact"
+note = "Extension rewrite"
+ref = "§5"
+
+[[inline]]
+myst = "[](./references.bib)"
+quarto = "[references.bib](./references.bib)"
+fidelity = "lossy"
+note = "MyST auto-fills text; Quarto renders empty"
+ref = "§5"
+
+[[inline]]
+myst = "[^label] + [^label]: text"
+quarto = "[^label] + [^label]: text"
+fidelity = "exact"
+note = "identical"
+ref = "§5"
+
+[[inline]]
+myst = "[Label]: https://url"
+quarto = "[Label]: https://url"
+fidelity = "exact"
+note = "identical"
+ref = "§5"
+
+[[inline]]
+myst = "\\ at end of line"
+quarto = "\\ at end of line"
+fidelity = "exact"
+note = "identical"
+ref = "§5"
+
+# ---------------------------------------------------------------------------
+# §8.2 Field mapping — myst.yml (project.*) ↔ _quarto.yml
+# ---------------------------------------------------------------------------
+
+[[config_field]]
+myst = "title"
+quarto = "title / book.title"
+fidelity = "exact"
+note = "Location depends on project type"
+ref = "§8.2"
+
+[[config_field]]
+myst = "subtitle"
+quarto = "subtitle"
+fidelity = "exact"
+note = "Currently dropped"
+ref = "§8.2"
+
+[[config_field]]
+myst = "short_title"
+quarto = "| short-title (metadata)"
+fidelity = "lossy"
+note = "Currently dropped"
+ref = "§8.2"
+
+[[config_field]]
+myst = "description"
+quarto = "description"
+fidelity = "exact"
+note = "Currently dropped — and subject wrongly overwrites it"
+ref = "§8.2"
+
+[[config_field]]
+myst = "subject"
+quarto = "categories"
+fidelity = "lossy"
+note = "Currently mapped to description, which is wrong"
+ref = "§8.2"
+
+[[config_field]]
+myst = "keywords"
+quarto = "keywords"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[]"
+quarto = "author[]"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].name"
+quarto = "author[].name"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].orcid"
+quarto = "author[].orcid"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].email"
+quarto = "author[].email"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].affiliation"
+quarto = "author[].affiliations[].name"
+fidelity = "lossy"
+note = "MyST allows a bare string; Quarto wants a list of objects"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].roles"
+quarto = "author[].roles"
+fidelity = "exact"
+note = "Both use CRediT"
+ref = "§8.2"
+
+[[config_field]]
+myst = "authors[].corresponding"
+quarto = "author[].corresponding"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "date"
+quarto = "date"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "license"
+quarto = "license"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "doi"
+quarto = "doi"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "github"
+quarto = "repo-url"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "bibliography"
+quarto = "bibliography"
+fidelity = "exact"
+ref = "§8.2"
+
+[[config_field]]
+myst = "toc[].file"
+quarto = "book.chapters[]"
+fidelity = "lossy"
+note = "Extension rewrite must be type-aware: .md→.qmd, .ipynb→.ipynb (unchanged)"
+ref = "§8.2"
+
+[[config_field]]
+myst = "exports[]"
+quarto = "format"
+fidelity = "lossy"
+note = "See §8.3"
+ref = "§8.2"
+
+[[config_field]]
+myst = "downloads[]"
+quarto = "downloads"
+fidelity = "lossy"
+note = "Partial analogue"
+ref = "§8.2"
+
+[[config_field]]
+myst = "banner"
+quarto = "image"
+fidelity = "lossy"
+ref = "§8.2"
+
+[[config_field]]
+myst = "thumbnail"
+quarto = "image"
+fidelity = "lossy"
+note = "Collides with banner — prefer banner, warn on both"
+ref = "§8.2"
+
+[[config_field]]
+myst = "abbreviations"
+fidelity = "unmappable"
+note = "No Quarto feature. Preserve as comment"
+ref = "§8.2"
+
+[[config_field]]
+myst = "open_access"
+fidelity = "unmappable"
+note = "Preserve as comment"
+ref = "§8.2"
+
+[[config_field]]
+myst = "venue"
+fidelity = "unmappable"
+note = "Preserve as comment (journal templates may consume it)"
+ref = "§8.2"
+
+[[config_field]]
+myst = "funding"
+quarto = "funding"
+fidelity = "lossy"
+note = "Shapes differ"
+ref = "§8.2"
+
+[[config_field]]
+myst = "id"
+fidelity = "unmappable"
+note = "Preserve as comment"
+ref = "§8.2"
+
+[[config_field]]
+myst = "math (macros)"
+quarto = "include-in-header LaTeX macros"
+fidelity = "lossy"
+ref = "§8.2"
+
+[[config_field]]
+myst = "numbering"
+quarto = "number-sections + crossref"
+fidelity = "lossy"
+ref = "§8.2"
+
+[[config_field]]
+myst = "site.template"
+quarto = "format.html.theme"
+fidelity = "lossy"
+note = "Theme names do not correspond"
+ref = "§8.2"
+
+[[config_field]]
+quarto = "manuscript.article"
+fidelity = "unmappable"
+note = "Derived from exports[].article"
+ref = "§8.2"
+
+# ---------------------------------------------------------------------------
+# §8.3 Exports ↔ formats
+# ---------------------------------------------------------------------------
+
+[[export_format]]
+myst = "- format: pdf"
+quarto = "format: {pdf: {}}"
+fidelity = "exact"
+ref = "§8.3"
+
+[[export_format]]
+myst = "- format: docx"
+quarto = "format: {docx: {}}"
+fidelity = "exact"
+ref = "§8.3"
+
+[[export_format]]
+myst = "- format: tex"
+quarto = "format: {latex: {}}"
+fidelity = "exact"
+ref = "§8.3"
+
+[[export_format]]
+myst = "- format: jats"
+quarto = "format: {jats: {}}"
+fidelity = "exact"
+ref = "§8.3"
+
+[[export_format]]
+myst = "- format: meca"
+fidelity = "unmappable"
+ref = "§8.3"
+
+[[export_format]]
+myst = "- template: lapreprint-typst"
+quarto = "format: {typst: {}}"
+fidelity = "lossy"
+note = "template not portable"
+ref = "§8.3"
+
+# ---------------------------------------------------------------------------
+# §10 Legacy read-only surface — accepted when reading MyST, never emitted.
+# ---------------------------------------------------------------------------
+
+[[legacy_role]]
+myst = "{cite}`key`"
+modern_myst = "[@key]"
+quarto = "[@key]"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{cite:t}`key`"
+modern_myst = "@key"
+quarto = "@key"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{cite:p}`key`"
+modern_myst = "[@key]"
+quarto = "[@key]"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{numref}`fig-x`"
+modern_myst = "@fig-x"
+quarto = "@fig-x"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{numref}`Figure %s <fig-x>`"
+modern_myst = "[Figure %s](#fig-x)"
+quarto = "[Fig @fig-x]"
+fidelity = "lossy"
+note = "Custom prefix text (%s) not preserved; Quarto emits a fixed 'Fig' prefix"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{ref}`label`"
+modern_myst = "@label / [](#label)"
+quarto = "@label"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{eq}`label`"
+modern_myst = "@eq-label"
+quarto = "@eq-label"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = "{doc}`path`"
+modern_myst = "[path](path.md)"
+quarto = "[path](path.qmd)"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+[[legacy_role]]
+myst = ":name: directive option"
+modern_myst = ":label:"
+quarto = "{#id}"
+fidelity = "exact"
+legacy = true
+ref = "§10"
+
+# ---------------------------------------------------------------------------
+# §3.3 Prefix rules — the colon-prefix → hyphen-prefix normalization table.
+# Quarto's registered type prefixes (§3.3), each with its MyST colon-form
+# source, plus the documented tab:→tbl- exception and the general _→- rule.
+# Normalization is not injective (§3.5), so every row needs the sidecar map
+# (.mystquarto/labels.json) to recover the original spelling on reverse
+# conversion — hence "lossy" throughout.
+# ---------------------------------------------------------------------------
+
+[[label_prefix]]
+myst = "fig:"
+quarto = "fig-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "eq:"
+quarto = "eq-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "sec:"
+quarto = "sec-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "lst:"
+quarto = "lst-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "thm:"
+quarto = "thm-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "lem:"
+quarto = "lem-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "cor:"
+quarto = "cor-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "prp:"
+quarto = "prp-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "cnj:"
+quarto = "cnj-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "def:"
+quarto = "def-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "exm:"
+quarto = "exm-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "exr:"
+quarto = "exr-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "sol:"
+quarto = "sol-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "rem:"
+quarto = "rem-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "alg:"
+quarto = "alg-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "tip:"
+quarto = "tip-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "nte:"
+quarto = "nte-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "wrn:"
+quarto = "wrn-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "imp:"
+quarto = "imp-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "cau:"
+quarto = "cau-"
+fidelity = "lossy"
+note = "Requires sidecar map (.mystquarto/labels.json) to recover original spelling on reverse conversion"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "tab:"
+quarto = "tbl-"
+fidelity = "lossy"
+note = "Exception: tab: → tbl- (not tab-), per §3.4"
+ref = "§3.3"
+
+[[label_prefix]]
+myst = "_"
+quarto = "-"
+fidelity = "lossy"
+note = "_ → - in labels; Quarto warns against _ in IDs (breaks LaTeX/PDF)"
+ref = "§3.3"
