@@ -61,11 +61,39 @@ output produced by the two runs above was deleted after capturing
 **Result vs. prediction — IMPORTANT DISCREPANCY.** The spec predicted clean
 output after run 1 and one level of `docs-quarto/docs-quarto/` nesting after
 run 2. What was actually observed is worse: **run 1 alone** already produces
-`docs-quarto/docs-quarto/images/banner.png`, because the output directory
-exists as a live subdirectory of the input tree for the remainder of the
-*same* run, and Python's `os.walk` directory-iteration order (not guaranteed
-alphabetical) determined that `images/` was visited (and copied into
-`docs-quarto/images/`) before `docs-quarto/` itself was walked and its
-now-present `images/` subdirectory copied again. Run 2 adds one further
-level (`docs-quarto/docs-quarto/docs-quarto/`). Full before/after trees are
+`docs-quarto/docs-quarto/images/banner.png`. Full before/after trees are
 recorded in `python-actual.txt`.
+
+**Root cause, traced through `convert_directory` (convert.py:222-299) and
+`_copy_assets` (convert.py:335-368):**
+
+1. `os.makedirs(effective_output_dir, exist_ok=True)` creates
+   `input_dir/docs-quarto` *before* any files are converted or copied — the
+   output directory exists as a live subdirectory of the input tree for the
+   remainder of the same run.
+2. Config and markdown files are converted next, writing
+   `docs-quarto/_quarto.yml` and `docs-quarto/article.qmd` into that
+   now-existing subdirectory.
+3. `_copy_assets` then calls `os.walk(input_dir)` — `docs-quarto` is not in
+   `skip_dirs` (convert.py:337-350), so the walk descends into it too.
+   `os.walk` is topdown and lazy: it copies `images/banner.png` into
+   `docs-quarto/images/banner.png` as soon as it visits the `images/`
+   subtree, and because `os.walk`'s directory order is OS-dependent (not
+   guaranteed alphabetical), it visited `docs-quarto` *after* `images` here —
+   finding the file it had just copied a moment earlier still sitting inside
+   the directory it was currently walking, and copying it again, one level
+   deeper: `docs-quarto/docs-quarto/images/banner.png`.
+4. Every subsequent run repeats step 3 against whatever nesting already
+   exists, adding one more `docs-quarto/` level each time — existing
+   duplicates are never cleaned up (`_copy_assets`'s
+   `if not os.path.exists(dst): shutil.copy2(...)` guard only skips a path
+   that's already there, it doesn't detect that the path is itself inside the
+   output tree).
+
+So the defect is not "second run duplicates the first run's output" — it is
+"an output directory nested inside the input directory makes a single
+asset-copy pass structurally unstable," and `os.walk`'s directory-iteration
+order determines how much nesting appears on the very first run. This matches
+the catalogued `article-template/docs-quarto/docs-quarto/` artifact in
+`docs/dialect-comparison.md` §12 (D16), itself evidence of ≥1 prior run
+having already compounded before the audit found it.

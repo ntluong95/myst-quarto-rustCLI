@@ -36,49 +36,9 @@ tests/corpus/defects/d16-output-recursion/input_dir/docs-quarto/images/banner.pn
 tests/corpus/defects/d16-output-recursion/input_dir/images/banner.png
 tests/corpus/defects/d16-output-recursion/input_dir/myst.yml
 
-DISCREPANCY VS. THE CONTROLLER'S PREDICTION:
-
-The spec predicted the `docs-quarto/docs-quarto/` duplicate would appear only
-after the SECOND run (run 1 clean, run 2 nested once). What actually happens
-is worse: run 1 ALONE already produces one level of nesting
-(`docs-quarto/docs-quarto/images/banner.png`). Root cause, traced through
-`convert_directory` (convert.py:222-299) and `_copy_assets`
-(convert.py:335-368):
-
-1. `os.makedirs(effective_output_dir, exist_ok=True)` creates
-   `input_dir/docs-quarto` BEFORE any files are converted or copied — the
-   output directory exists as a live subdirectory of the input tree for the
-   remainder of the same run.
-2. Config and markdown files are converted next, writing
-   `docs-quarto/_quarto.yml` and `docs-quarto/article.qmd` into that
-   now-existing subdirectory.
-3. `_copy_assets` then calls `os.walk(input_dir)` — `docs-quarto` is not in
-   `skip_dirs` (convert.py:337-350), so the walk descends into it too.
-   `os.walk` is topdown and lazy: it copies `images/banner.png` into
-   `docs-quarto/images/banner.png` as soon as it visits the `images/`
-   subtree, and if `os.walk`'s (OS-dependent, not alphabetically guaranteed)
-   directory order visits `docs-quarto` AFTER `images`, it finds the file it
-   just copied a moment earlier still sitting inside the directory it is
-   currently walking and copies it AGAIN, one level deeper:
-   `docs-quarto/docs-quarto/images/banner.png`.
-4. Every subsequent run repeats step 3 against whatever nesting already
-   exists, adding one more `docs-quarto/` level each time (run 2 adds
-   `docs-quarto/docs-quarto/docs-quarto/images/banner.png` on top of the
-   level-1 and level-2 copies from run 1, which are left in place by
-   `_copy_assets`'s `if not os.path.exists(dst): shutil.copy2(...)` guard —
-   existing duplicates are never cleaned up, only added to).
-
-So the defect is not merely "second run duplicates the first run's output" —
-it is "the output directory being a subdirectory of the input directory makes
-a single asset-copy pass structurally unstable," and Python's os.walk
-directory-iteration order (not deterministically alphabetical) determines how
-much nesting appears on the very first run. This matches the catalogued
-`article-template/docs-quarto/docs-quarto/` artifact in
-docs/dialect-comparison.md §12 (D16), which is itself evidence of >=1 prior
-run already having compounded before the audit found it.
-
 Capture method: real CLI run twice (`uv run myst2quarto ... -o
 .../input_dir/docs-quarto`), directory tree captured with `find | sort`
 before and after each run. The `docs-quarto/` scratch output was deleted
 after this capture (see README.md) — it is not committed; this file is the
-frozen record.
+frozen record. Root-cause analysis of the nesting mechanism lives in
+README.md, not here — this file is the raw captured data only.

@@ -458,30 +458,34 @@ on the expected-lossy class, which covers most rows in this section.
 
 ## 12. Verified defects in the Python implementation
 
-Reproduced against `article-template/` → `article-template/docs-quarto/`.
-Each becomes a failing test case before the Rust port begins.
+Reproduced against `article-template/` → `article-template/docs-quarto/`, and
+against the direction-aware, renderer-verified fixtures now frozen under
+`tests/corpus/defects/d01-*` … `d16-*` (Phase 1 of
+`plans/260903-1749-rust-port-dialect-fidelity/`). Each is a failing test case
+before the Rust port begins; each fixture's `README.md` documents the exact
+capture command and, where applicable, the render-verification command.
 
 **Direction matters.** A fixture built in the wrong direction passes against the
 unfixed tool and proves nothing. `M→Q` = MyST→Quarto, `Q→M` = Quarto→MyST.
 
 | # | Dir | Defect | Evidence | Root cause |
 |---|---|---|---|---|
-| D1 | M→Q | Colon labels emitted unchanged into Quarto — every cross-ref dead | `@fig:samples`, `{#eq:chi-squared}` in `docs-quarto/article.qmd:69,126` | No label normalization layer (§3.4) |
-| D2 | M→Q | `:::{figure}` label dropped entirely | `docs-quarto/article.qmd:75` — no `{#fig-samples}` | Reads `:name:`, not `:label:` (§10) |
-| D3 | M→Q | `:::{table}` caption and label both lost | `docs-quarto/article.qmd:106-113` | Caption comes from directive **body** in MyST; code reads `argument` |
-| D4 | M→Q | `% comments` emitted as literal visible text | `docs-quarto/article.qmd:40,79,161` | `%` comments unhandled (§9) |
-| D5 | M→Q | `(sec:data-analysis)=` emitted as literal visible text | `docs-quarto/article.qmd:81` | Target syntax unhandled (§3.1) |
-| D6 | M→Q | `format: {}` — invalid Quarto | `docs-quarto/_quarto.yml:15` | Export entry has `template:` but no `format:` (§8.3) |
-| D7 | M→Q | `analysis.ipynb.qmd` — nonexistent chapter file | `docs-quarto/_quarto.yml:14` | Extension rewrite strips only `.md` (§8.2) |
-| D8 | M→Q | Article mis-typed as `book` | `docs-quarto/_quarto.yml:2`; cause at `config.py:10-22` | `toc` presence treated as book signal (§8.1) |
-| D9 | both | Block scalars mangled into folded single-quoted strings | `docs-quarto/article.qmd:3-19` | Style-discarding YAML round-trip (§8.4) |
-| D10 | M→Q | 8 config fields dropped, 1 overwritten, no warning for any | Dropped: `id`, `subtitle`, `short_title`, `open_access`, `venue`, `banner`, `abbreviations`, `site.template`. **Overwritten:** `description` holds `subject`'s value (`_quarto.yml:21`). `downloads` was `[]`, so its loss is vacuous | Unmapped keys ignored without warning (§8.2) |
-| D11 | M→Q | `:::{figure} #nb:analysis` → broken image link | `docs-quarto/article.qmd:139` | Notebook embed unhandled (§7) |
-| D12 | both | **Zero warnings emitted for any of the above** | `warnings.py:31` is the only `.append`; no transform calls it; `cli.py:63` prints success unconditionally | `WarningCollector` exists but is never populated |
-| D13 | both | `{{< include >}}` / `{include}` unhandled | `grep "{{<" src/mystquarto/transforms/` → no matches | Shortcodes not parsed (§7) |
-| D14 | Q→M | knitr `` `r expr` `` unhandled | `quarto_to_myst.py:12` matches only `` `{python} `` | Inline knitr form unrecognized (§5) |
-| D15 | **Q→M** | DOI citation keys corrupted | `quarto_to_myst.py:18,35`. Verified: `convert_quarto_to_myst("[@10.1038/nmeth.1974]")` → `` [{cite:t}`10`.1038/nmeth.1974] ``, while the M→Q direction leaves it **intact** | `_SINGLE_CITE_RE` `[\w-]+` fails to match, then `_BARE_CITE_RE` mangles the key mid-string (§4) |
-| D16 | both | Output directory nested inside input is re-converted and re-copied each run | `article-template/docs-quarto/docs-quarto/` — 8 duplicated files incl. a 895 KB `banner.png` | `discover_files` (`convert.py:69-82`) and `_copy_assets` (`convert.py:337-350`) keep separate skip-sets, neither excluding the output dir |
+| D1 | M→Q | Colon labels emitted unchanged into Quarto — every cross-ref dead | `@fig:samples`, `{#eq:chi-squared}` in `docs-quarto/article.qmd:69,126`; reproduced in `tests/corpus/defects/d01-colon-labels-unnormalized/` | No label normalization layer (§3.4) |
+| D2 | M→Q | `:::{figure}` label dropped entirely | `docs-quarto/article.qmd:75` — no `{#fig-samples}`; reproduced in `tests/corpus/defects/d02-figure-label-dropped/` | Reads `:name:`, not `:label:` (§10) |
+| D3 | M→Q | `:::{table}` caption and label both lost | `docs-quarto/article.qmd:106-113`; reproduced in `tests/corpus/defects/d03-table-caption-label-lost/` | Caption comes from directive **body** in MyST; code reads `argument` |
+| D4 | M→Q | `% comments` emitted as literal visible text | `docs-quarto/article.qmd:40,79,161`; reproduced in `tests/corpus/defects/d04-percent-comments-literal/` | `%` comments unhandled (§9) |
+| D5 | M→Q | `(sec:data-analysis)=` emitted as literal visible text | `docs-quarto/article.qmd:81`; reproduced in `tests/corpus/defects/d05-heading-target-literal/` | Target syntax unhandled (§3.1) |
+| D6 | M→Q | `format: {}` — invalid Quarto | `docs-quarto/_quarto.yml:15`; reproduced in `tests/corpus/defects/d06-export-template-only/` | Export entry has `template:` but no `format:` (§8.3) |
+| D7 | M→Q | `analysis.ipynb.qmd` — nonexistent chapter file | `docs-quarto/_quarto.yml:14`; reproduced in `tests/corpus/defects/d07-notebook-chapter-extension/` | Extension rewrite strips only `.md` (§8.2) |
+| D8 | M→Q | Article mis-typed as `book` | `docs-quarto/_quarto.yml:2`; cause at `config.py:10-22`; reproduced in `tests/corpus/defects/d08-article-mistyped-book/` | `toc` presence treated as book signal, ignoring `site.template: article-theme` (§8.1) |
+| D9 | M→Q | Block scalars mangled into folded/quoted strings | `docs-quarto/article.qmd:3-19`; reproduced in `tests/corpus/defects/d09-block-scalar-mangled/` (page frontmatter path, `frontmatter.py`'s `replace_frontmatter`) | Style-discarding YAML round-trip — stock `yaml.dump` (§8.4) |
+| D10 | M→Q | 8 config fields dropped, 1 overwritten, no warning for any | Dropped: `id`, `subtitle`, `short_title`, `open_access`, `venue`, `banner`, `abbreviations`, `site.template`. **Overwritten:** `description` holds `subject`'s value (`_quarto.yml:21`). `downloads` was `[]`, so its loss is vacuous. Reproduced in `tests/corpus/defects/d10-config-fields-dropped/` | Unmapped keys ignored without warning (§8.2) |
+| D11 | M→Q | `:::{figure} #nb:analysis` → broken image link | `docs-quarto/article.qmd:139`; reproduced in `tests/corpus/defects/d11-notebook-embed-broken-link/` using the real syntax from `article-template/article.md:127` | Notebook embed unhandled (§7) |
+| D12 | both | **Zero warnings emitted for any of the above** | `warnings.py:31` is the only `.append`; no transform calls it; `cli.py:63` prints success unconditionally, even under `--strict`. Reproduced in `tests/corpus/defects/d12-silent-warnings/` (CLI run against D10's fixture, `--strict`, exit 0, zero warning text) | `WarningCollector` exists but is never populated |
+| D13 | both | `{{< include >}}` / `{include}` unhandled | `grep "{{<" src/mystquarto/transforms/` → no matches. Split by direction: `tests/corpus/defects/d13a-include-myst-to-quarto/` (`` ```{include} `` falls to the generic unknown-directive passthrough) and `tests/corpus/defects/d13b-include-quarto-to-myst/` (`{{< include >}}` copied through verbatim, invalid MyST) | Shortcodes not parsed (§7) |
+| D14 | Q→M | knitr `` `r expr` `` unhandled | `quarto_to_myst.py:12` matches only `` `{python} ``; reproduced in `tests/corpus/defects/d14-knitr-inline-unhandled/` | Inline knitr form unrecognized (§5) |
+| D15 | **Q→M** | DOI citation keys corrupted | `quarto_to_myst.py:18,35`. Verified: `convert_quarto_to_myst("[@10.1038/nmeth.1974]")` → `` [{cite:t}`10`.1038/nmeth.1974] ``, while the M→Q direction leaves it **intact**. Reproduced in `tests/corpus/defects/d15-doi-citation-keys/` — expected output is the **unchanged** input, since modern MyST and Quarto citation syntax are identical (§4) and the fix is a wider regex, not a legacy-form conversion | `_SINGLE_CITE_RE` `[\w-]+` fails to match `.`/`/`, then `_BARE_CITE_RE` mangles the key mid-string (§4) |
+| D16 | both | Output directory nested inside input is re-converted and re-copied — **worse than originally measured** | `article-template/docs-quarto/docs-quarto/` — 8 duplicated files incl. a 895 KB `banner.png`. Reproduced in `tests/corpus/defects/d16-output-recursion/`: nesting (`docs-quarto/docs-quarto/`) appears after a **single run**, not after a second run as originally assumed — `os.makedirs(effective_output_dir)` creates the output dir inside the input tree *before* `_copy_assets` walks it, and `os.walk`'s non-alphabetical directory order can revisit the just-created output subtree within the same pass. A second run adds a further nesting level | `discover_files` (`convert.py:69-82`) and `_copy_assets` (`convert.py:337-350`) keep separate skip-sets, neither excluding the effective output dir |
 
 Two further hazards found during red-team review, tracked as requirements rather
 than conversion defects because they are orchestration-layer, not dialect-layer:
@@ -492,6 +496,13 @@ than conversion defects because they are orchestration-layer, not dialect-layer:
 citing the `docs-quarto/` artifact, where the DOI key is in fact untouched. A
 fixture built from that reading would have matched its own baseline and passed
 before any fix existed. Direction is now recorded per row for this reason.
+
+**A note on D16's severity.** The original catalogue entry (and Phase 1's own
+plan text) assumed the recursion required two runs to manifest. Phase 1's
+renderer-backed reproduction found it manifests on the **first** run whenever
+the output directory is placed inside the input tree, which is precisely how
+`article-template/docs-quarto/` was produced. This raises D16 from a
+repeated-run hazard to a single-run one.
 
 ---
 
