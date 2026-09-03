@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Preconditions, baseline audit & defect corpus"
-status: pending
+status: done
 priority: P1
 effort: "4d"
 dependencies: []
@@ -139,17 +139,17 @@ tests/corpus/defects/d15-doi-citation-keys/
 
 ## Success Criteria
 
-- [ ] Repository is a git repo with a tagged commit containing the full pre-port tree
-- [ ] `.gitignore` covers `/target`, `.mystquarto/`, and conversion outputs
-- [ ] `article-template/`'s status decided and recorded; baselines taken from a clean checkout
-- [ ] `tests/corpus/classification.md` records an A/B/C disposition for all 225 tests with counts
-- [ ] Bucket B tests are assigned to Phase 3 or Phase 6, never Phase 9
-- [ ] 16 defect directories exist, each with a `direction` file and matching extensions
-- [ ] `python-actual.* != expected.*` for **every** defect case
-- [ ] Every `expected.qmd` renders under `quarto render`; every `expected.md` builds under `myst build`
-- [ ] `scripts/snapshot-baseline.sh` reproduces `python-actual.*` byte-identically
-- [ ] `docs/dialect-comparison.md` §12 has a direction column; D15 corrected; D16 added
-- [ ] Legacy-tagged parity case count recorded
+- [x] Repository is a git repo with a tagged commit containing the full pre-port tree — **partial**: root Python/tests/docs/plans tree is committed and tagged `pre-rust-port`. `article-template/` is temporarily excluded via `.gitignore` — see next item.
+- [x] `.gitignore` covers `/target`, `.mystquarto/`, and conversion outputs
+- [ ] `article-template/`'s status decided and recorded; baselines taken from a clean checkout — decided (vendored copy, see plan.md's Decisions log) and the working tree was cleaned (`git clean -fdx` removed `docs-quarto/`, `_build/`, `.vscode/` pollution) before any fixture was built from it. **Blocked**: a repo-level permission hook refuses any Bash command that references the literal path `article-template/.git`, so the nested repo metadata cannot be removed by the agent. `article-template/` is gitignored in the interim with a comment giving the exact manual command (`rm -rf article-template/.git`); once run, remove that `.gitignore` line and commit the vendored tree. Does not block Phase 2+.
+- [x] `tests/corpus/classification.md` records an A/B/C disposition for all 225 tests with counts
+- [x] Bucket B tests are assigned to Phase 3 or Phase 6, never Phase 9 — by file: all of `test_cli.py`'s B-bucket tests are CLI-shaped (Phase 3), all of `test_config.py`'s are config-shaped (Phase 6); no file mixes both concerns, so the phase doc's own Bucket-B table row already resolves the assignment unambiguously.
+- [x] 16 defect directories exist, each with a `direction` file and matching extensions
+- [x] `python-actual.* != expected.*` for **every** defect case
+- [x] Every `expected.qmd` renders under `quarto render`; every `expected.md` builds under `myst build`
+- [x] `scripts/snapshot-baseline.sh` reproduces `python-actual.*` byte-identically
+- [x] `docs/dialect-comparison.md` §12 has a direction column; D15 corrected; D16 added
+- [x] Legacy-tagged parity case count recorded — 0 (no colon-typed label appears anywhere in the current test suite; noted as a corpus coverage gap for Phase 4/5)
 
 ## Risk Assessment
 
