@@ -137,7 +137,7 @@ Phase 7 reads to decide whether to emit a diagnostic. Encoding it as data means
       corruption was reverted and the suite passed again. Running
       `uv run python scripts/render-mapping-tables.py` against the committed
       `mappings.toml` and `docs/dialect-comparison.md` produces zero diff.
-- [ ] **If the gate said stop:** *(does not apply — the gate said GO; no
+- [x] **If the gate said stop:** *(does not apply — the gate said GO; no
       match-arms fallback was taken and `docs/dialect-comparison.md` was
       intentionally restructured, not left unchanged, to host the generated
       tables)*

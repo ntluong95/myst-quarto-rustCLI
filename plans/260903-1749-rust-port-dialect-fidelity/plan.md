@@ -1,7 +1,7 @@
 ---
 title: "rust-port-dialect-fidelity"
 description: "Rewrite mystquarto in Rust around a typed document IR, targeting modern mystmd v1, fixing 16 verified conversion defects and an unscoped file-orchestration layer"
-status: pending
+status: in-progress
 priority: P1
 effort: "8w"
 tags: [rust, port, myst, quarto, converter]
@@ -13,6 +13,8 @@ blocks: []
 # rust-port-dialect-fidelity
 
 ## Overview
+
+Plan status: `in-progress`. Completed phases: 5/9.
 
 Port `mystquarto` from Python to Rust, replacing the regex line-scanner with a
 typed document IR, and fixing the 16 verified defects catalogued in
@@ -78,8 +80,8 @@ carries the distribution and performance win.
 | 1 | [Preconditions, baseline audit & defect corpus](./phase-01-baseline-audit.md) | Done | — |
 | 2 | [Dialect reference & conversion contract](./phase-02-dialect-reference.md) | Done | 1 |
 | 3 | [Rust core: workspace, IR, YAML, orchestration contract](./phase-03-rust-core.md) | Done | 2 |
-| 4 | [Readers: MyST + Quarto → IR](./phase-04-readers.md) | Pending | 3 |
-| 5 | [Writers: IR → MyST + Quarto, label normalization](./phase-05-writers.md) | Pending | 4 |
+| 4 | [Readers: MyST + Quarto → IR](./phase-04-readers.md) | Done | 3 |
+| 5 | [Writers: IR → MyST + Quarto, label normalization](./phase-05-writers.md) | Done | 4 |
 | 6 | [Config & frontmatter mapping](./phase-06-config-frontmatter.md) | Pending | 3, 4 |
 | 7 | [Diagnostics & lossy preservation](./phase-07-diagnostics.md) | Pending | 5, 6 |
 | 8 | [Test corpus & renderer-backed validation](./phase-08-test-corpus.md) | Pending | 7 |

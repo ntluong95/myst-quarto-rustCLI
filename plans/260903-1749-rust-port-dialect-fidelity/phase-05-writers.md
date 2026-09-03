@@ -205,25 +205,25 @@ Collapse polarity inverts: MyST `:open: true` ≙ Quarto `collapse="false"`.
 
 ## Success Criteria
 
-- [ ] Every reference §3.4 normalization row has a passing unit test
-- [ ] `tab:x` → `tbl-x` (not `tab-x`)
-- [ ] Unprefixed labels get the prefix inferred from block type
-- [ ] Collisions are disambiguated from a stable `(source_path, label)` sort and warned
-- [ ] Converting a subset of files does not renumber labels in other files (RT-08)
-- [ ] No Quarto output contains `:` or `_` in any `{#id}`
-- [ ] No MyST output contains any legacy role
-- [ ] `article-template/` → Quarto: every `@ref` has a matching `{#id}` (D1)
-- [ ] Figure labels survive (D2); table captions and labels survive (D3)
-- [ ] `:::{figure} #nb:analysis` → `{{< embed analysis.ipynb#fig-analysis >}}`
+- [x] Every reference §3.4 normalization row has a passing unit test
+- [x] `tab:x` → `tbl-x` (not `tab-x`)
+- [x] Unprefixed labels get the prefix inferred from block type
+- [x] Collisions are disambiguated from a stable `(source_path, label)` sort and warned
+- [x] Converting a subset of files does not renumber labels in other files (RT-08)
+- [x] No Quarto output contains `:` or `_` in any `{#id}`
+- [x] No MyST output contains any legacy role
+- [x] `article-template/` → Quarto: every `@ref` has a matching `{#id}` (D1)
+- [x] Figure labels survive (D2); table captions and labels survive (D3)
+- [x] `:::{figure} #nb:analysis` → `{{< embed analysis.ipynb#fig-analysis >}}`
       **and the notebook copy is relabelled**, so `quarto render` produces HTML (D11)
-- [ ] A notebook outside the conversion set yields `Preserved` + warning, never a
+- [x] A notebook outside the conversion set yields `Preserved` + warning, never a
       dangling embed
-- [ ] Sidecar: hostile, stale, corrupt, wrong-direction, wrong-version and
+- [x] Sidecar: hostile, stale, corrupt, wrong-direction, wrong-version and
       oversized inputs each produce the documented outcome (RT-09)
-- [ ] A newline-bearing sidecar label cannot escape the `(sec:x)=` construct
-- [ ] Single-file re-run merges into the existing sidecar rather than truncating it
-- [ ] MyST→Quarto→MyST byte-identical on the Stable class with sidecar present
-- [ ] Two identical runs produce identical bytes
+- [x] A newline-bearing sidecar label cannot escape the `(sec:x)=` construct
+- [x] Single-file re-run merges into the existing sidecar rather than truncating it
+- [x] MyST→Quarto→MyST byte-identical on the Stable class with sidecar present
+- [x] Two identical runs produce identical bytes
 
 ## Risk Assessment
 

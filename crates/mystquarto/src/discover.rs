@@ -168,6 +168,49 @@ pub fn discover_files(
     files
 }
 
+/// Finds every `.ipynb` file under `directory`, regardless of conversion
+/// direction — a notebook's cells can be referenced by a MyST `#nb:` figure
+/// (indexed for `MystToQuarto`) or by a Quarto `{{< embed >}}` shortcode
+/// (indexed for `QuartoToMyst`), so both directions need the same index
+/// built the same way. Shares `discover_files`'s skip-dir set, symlink
+/// policy (never followed), output-root exclusion (the D16 fix), and sorted
+/// output — see that function's docs for the rationale behind each.
+#[must_use]
+pub fn discover_notebooks(directory: &Path, effective_output_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let walker = WalkDir::new(directory).into_iter().filter_entry(|entry| {
+        if !entry.file_type().is_dir() {
+            return true;
+        }
+        if entry.depth() == 0 {
+            return true;
+        }
+        let name = entry.file_name().to_str().unwrap_or("");
+        if DISCOVERY_SKIP_DIRS.contains(&name) {
+            return false;
+        }
+        if let Some(out_root) = effective_output_root {
+            if effective_output_excluded_from_walk(out_root, entry.path()) {
+                return false;
+            }
+        }
+        true
+    });
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().and_then(|e| e.to_str()) == Some("ipynb") {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+
+    files.sort();
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +321,21 @@ mod tests {
         let tmp = tempdir("empty");
         let found = discover_files(&tmp, Direction::MystToQuarto, None);
         assert_eq!(found, Vec::<PathBuf>::new());
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn discovers_notebooks_regardless_of_direction_and_excludes_nested_output() {
+        let tmp = tempdir("notebooks");
+        fs::write(tmp.join("analysis.ipynb"), "{}").unwrap();
+        fs::write(tmp.join("article.md"), "# Intro\n").unwrap();
+        let output_root = tmp.join("out");
+        fs::create_dir_all(&output_root).unwrap();
+        fs::write(output_root.join("copy.ipynb"), "{}").unwrap();
+
+        let found = discover_notebooks(&tmp, Some(&output_root));
+        assert_eq!(found, vec![tmp.join("analysis.ipynb")]);
+
         cleanup(&tmp);
     }
 

@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Readers: MyST + Quarto → IR"
-status: pending
+status: done
 priority: P1
 effort: "6d"
 dependencies: [3]
@@ -169,30 +169,32 @@ which capture group fired:
 
 ## Success Criteria
 
-- [ ] Same-dialect round-trip is byte-identical on every **Stable-class** corpus
+Verified 2026-09-03 via `cargo test` and `cargo clippy --workspace --all-targets -- -D warnings`; targeted reader regression coverage is present in `crates/mystquarto-core/tests/readers.rs`.
+
+- [x] Same-dialect round-trip is byte-identical on every **Stable-class** corpus
       file, and normalized-equal on legacy-tagged files (RT-13)
-- [ ] `article-template/article.md` parses with **zero** `Unmappable` blocks
+- [x] `article-template/article.md` parses with **zero** `Unmappable` blocks
       except `:::{figure} #nb:analysis`, which parses as `Figure { src: CellRef }`
-- [ ] `% comment` produces `Comment`, `50% of users` does not (D4)
-- [ ] `(sec:data-analysis)=` produces `Target` bound to the following heading (D5)
-- [ ] `:label:` and `:name:` both populate `Block.label`; `:label:` wins (D2)
-- [ ] Figure/table captions come from the directive body (D3)
-- [ ] `[@10.1038/nmeth.1974]` survives inline scanning intact **in the
+- [x] `% comment` produces `Comment`, `50% of users` does not (D4)
+- [x] `(sec:data-analysis)=` produces `Target` bound to the following heading (D5)
+- [x] `:label:` and `:name:` both populate `Block.label`; `:label:` wins (D2)
+- [x] Figure/table captions come from the directive body (D3)
+- [x] `[@10.1038/nmeth.1974]` survives inline scanning intact **in the
       Quarto→MyST direction**, where the corruption actually occurs (D15) —
       the original criterion was direction-neutral and would have passed against
       the unfixed tool
-- [ ] `We used @numpy.` captures `numpy`, not `numpy.` — no trailing-punctuation
+- [x] `We used @numpy.` captures `numpy`, not `numpy.` — no trailing-punctuation
       regression from the D15 fix
-- [ ] A `Preserved` block reads back to its original `BlockKind`, byte-identical
+- [x] A `Preserved` block reads back to its original `BlockKind`, byte-identical
       after re-emission (RT-11)
-- [ ] `#nb:analysis` resolves to `analysis.ipynb` via the notebook index; an
+- [x] `#nb:analysis` resolves to `analysis.ipynb` via the notebook index; an
       unresolved label yields `Unmappable`, never a guessed filename (RT-03)
-- [ ] Include traversal, cycle, depth-cap and nested-in-list cases are refused
+- [x] Include traversal, cycle, depth-cap and nested-in-list cases are refused
       with diagnostics; D13 has its own fixtures since the fixture has no includes
-- [ ] Role syntax inside code spans is not transformed
-- [ ] `{{< include >}}` and `{{< embed >}}` parse to typed blocks (D13)
-- [ ] `` `r expr` `` parses with `engine: knitr` recorded (D14)
-- [ ] Every block has a span that points at the right source line
+- [x] Role syntax inside code spans is not transformed
+- [x] `{{< include >}}` and `{{< embed >}}` parse to typed blocks (D13)
+- [x] `` `r expr` `` parses with `engine: knitr` recorded (D14)
+- [x] Every block has a span that points at the right source line
 
 ## Risk Assessment
 

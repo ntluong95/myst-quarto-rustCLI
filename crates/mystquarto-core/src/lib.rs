@@ -1,14 +1,20 @@
 //! Core types for the `mystquarto` Rust port: the `mappings.toml`
-//! conversion contract (Phase 2), and the document IR, leaf types
-//! (`Span`, `Label`), and YAML strategy (Phase 3). Readers, writers, and
-//! the file orchestration contract are later phases' responsibility.
+//! conversion contract, the document IR, leaf types (`Span`, `Label`), YAML
+//! strategy, MyST/Quarto readers, IR->text writers, label normalization
+//! (`registry`), notebook cell relabelling, and batch conversion
+//! (`pipeline`).
 #![forbid(unsafe_code)]
 
 pub mod fs;
 pub mod ir;
 pub mod label;
 pub mod mappings;
+pub mod notebook;
+pub mod pipeline;
+pub mod reader;
+pub mod registry;
 pub mod span;
+pub mod writer;
 pub mod yaml;
 
 pub use ir::{
@@ -21,5 +27,9 @@ pub use mappings::{
     DirectiveMapping, ExportFormatMapping, Fidelity, InlineMapping, LabelPrefixMapping,
     LegacyRoleMapping, Mappings, RoleMapping, StructuralMapping,
 };
+pub use reader::{
+    MystReader, NotebookCellIndex, PreservationStore, QuartoReader, ReaderContext, ReaderError,
+};
+pub use registry::{LabelRegistry, RefKind, RegistryWarning};
 pub use span::Span;
 pub use yaml::YamlValue;

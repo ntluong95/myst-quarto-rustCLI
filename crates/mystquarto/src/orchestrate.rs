@@ -1,26 +1,25 @@
 //! Shared orchestration for all three binaries: resolve input/output paths
 //! through the path guard, apply the `--in-place`/`--force`/`--dry-run`
-//! contract, discover files, and call the (this-phase-stubbed)
-//! [`run_conversion`] for each one.
+//! contract, discover files and notebooks, and run the batch conversion
+//! pipeline ([`mystquarto_core::pipeline`]).
 //!
-//! **What this phase implements for real:** argument-driven path
-//! resolution, discovery, the `--dry-run` zero-writes guarantee, and the
-//! full `--in-place` safety contract (config-overwrite gate, clean-VCS-state
-//! gate, delete-only-after-success, stop-the-batch-on-first-failure).
-//! **What this phase stubs:** [`run_conversion`] itself always fails for a
-//! real (non-dry-run) request — Phase 4/5 replace its body with the actual
-//! MyST<->Quarto transform. Config file conversion is stubbed the same way
-//! (Phase 6's job) — only the overwrite-refusal *gate* around it is real
-//! this phase.
+//! **The `run_conversion(input, output, direction)` stub Phase 3 built this
+//! module around does not survive contact with Phase 5.** Its own docs
+//! said the signature "is stable across that change" — that turned out to
+//! be wrong: [`mystquarto_core::LabelRegistry`] is run-scoped (RT-08), so it
+//! must see every document in a conversion set *before* any single one is
+//! written, which a genuinely per-file function cannot provide. This module
+//! now calls [`mystquarto_core::pipeline::convert_myst_to_quarto_batch`] /
+//! [`mystquarto_core::pipeline::convert_quarto_to_myst_batch`] once per
+//! directory-mode run, then the existing per-file loop below only writes
+//! bytes and applies the (unchanged, still fully tested) `--in-place`/
+//! `--dry-run` contract.
 //!
 //! ### The `--in-place` contract, precisely
 //!
 //! 1. **Delete-only-after-success.** A source content file is removed only
-//!    after [`run_conversion`] returns `Ok` for it (which, this phase,
-//!    never happens for a real run — the positive path is therefore
-//!    implemented but only exercisable once Phase 4/5 land; the negative
-//!    path — a source is never touched while its conversion is stubbed — is
-//!    what this phase's tests actually prove).
+//!    after its batch-rendered output has been written and renamed
+//!    successfully.
 //! 2. **Config overwrite gate.** An existing hand-authored `myst.yml`/
 //!    `_quarto.yml` at the computed output location is never overwritten
 //!    without `--force`; instead the CLI reports a conflict and would write
@@ -38,6 +37,12 @@
 //!    to delete, so no compounding hazard) instead keeps a result for every
 //!    discovered file, matching the Python CLI's behavior of not aborting
 //!    the whole batch over one file's error.
+//! 5. **Notebook relabelling and the sidecar write are refused whenever
+//!    the output writes into the input tree** (`-o` aimed at or inside the
+//!    input directory, whether or not `--in-place` is set — H1 fix), unless
+//!    `--force` (Phase 5 spec's Risk Assessment: relabelling patches a file
+//!    the user may consider a source input, not build output) — skipped,
+//!    with a warning, rather than silently mutating a file in place.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,10 +51,18 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 
 use mystquarto_core::fs::assets::{self, AssetCopyReport};
+use mystquarto_core::fs::atomic::write_atomic;
 use mystquarto_core::fs::path_guard;
+use mystquarto_core::pipeline::{self, BatchFileError, BatchWarning};
+use mystquarto_core::{notebook, registry::sidecar};
 
 use crate::args::ConvertArgs;
 use crate::discover::{self, Direction};
+
+/// Relative path (from an output root) of the label/preservation sidecar
+/// directory.
+const SIDECAR_DIR: &str = ".mystquarto";
+const LABELS_FILE: &str = "labels.json";
 
 /// What happened (or would happen) to one discovered file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,16 +75,14 @@ pub struct FileOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileStatus {
     /// Conversion succeeded; the output was written and (if `--in-place`)
-    /// the source was removed. Not reachable this phase — [`run_conversion`]
-    /// always fails for a real request — but the variant exists now so
-    /// Phase 4/5 wiring it up is additive.
+    /// the source was removed.
     Converted,
     /// `--dry-run` was set: this is what would happen. Nothing was written.
     WouldConvert,
-    /// Conversion was attempted and failed. The message is
-    /// [`RunConversionError`]'s `Display` this phase (always "not
-    /// implemented yet"); Phase 4/5 will produce real per-construct
-    /// messages here instead.
+    /// Conversion was attempted and failed — the message is the batch
+    /// pipeline's own per-file error (a read/parse failure — see
+    /// `mystquarto_core::pipeline::BatchFileError`) or, for a file the
+    /// batch never got to, an I/O error at write time.
     Failed(String),
 }
 
@@ -85,11 +96,15 @@ pub struct RunReport {
     /// location and `--force` was not passed — the path of the `.new` file
     /// that would hold the real conversion once Phase 6 exists.
     pub config_conflict: Option<PathBuf>,
+    /// Non-fatal notices from the batch pipeline (label collisions, an
+    /// unreadable notebook, a stale/malformed sidecar, …) plus this
+    /// module's own (e.g. "notebook relabelling skipped under --in-place").
+    /// Phase 7 does not exist yet to give these real diagnostic codes.
+    pub warnings: Vec<String>,
 }
 
 impl RunReport {
-    /// Number of files actually converted (never true this phase — see
-    /// [`FileStatus::Converted`]'s docs).
+    /// Number of files actually converted.
     #[must_use]
     pub fn converted_count(&self) -> usize {
         self.outcomes
@@ -110,41 +125,26 @@ impl RunReport {
     }
 }
 
-/// Error from [`run_conversion`].
-#[derive(Debug)]
-pub enum RunConversionError {
-    /// The actual MyST<->Quarto/IR transform does not exist yet — Phase 4/5
-    /// build it. Every real (non-dry-run) call this phase returns this.
-    NotImplemented,
+fn batch_warning_strings(warnings: Vec<BatchWarning>) -> Vec<String> {
+    warnings
+        .into_iter()
+        .map(|w| match w.file {
+            Some(f) => format!("{}: {}", f.display(), w.message),
+            None => w.message,
+        })
+        .collect()
 }
 
-impl std::fmt::Display for RunConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RunConversionError::NotImplemented => {
-                write!(f, "conversion is not implemented yet (Phase 4/5)")
-            }
-        }
-    }
-}
-
-impl std::error::Error for RunConversionError {}
-
-/// Converts a single content file. **Stubbed this phase** — see the module
-/// docs. Phases 4/5 replace this function's body with the real transform;
-/// its signature (input path, output path, direction) is stable across
-/// that change.
-pub fn run_conversion(
-    _input: &Path,
-    _output: &Path,
-    _direction: Direction,
-) -> Result<(), RunConversionError> {
-    Err(RunConversionError::NotImplemented)
+fn batch_error_message(errors: &[BatchFileError], file: &Path) -> Option<String> {
+    errors
+        .iter()
+        .find(|e| e.file == file)
+        .map(|e| e.message.clone())
 }
 
 /// Runs one conversion invocation end to end: resolves paths, applies the
-/// `--in-place`/`--dry-run`/`--force` contract, discovers files, and calls
-/// [`run_conversion`] (or skips it under `--dry-run`) for each one.
+/// `--in-place`/`--dry-run`/`--force` contract, discovers files, and runs
+/// the batch conversion pipeline.
 pub fn execute(args: &ConvertArgs, direction: Direction) -> Result<RunReport> {
     let input_meta = fs::metadata(&args.input)
         .with_context(|| format!("input path does not exist: {}", args.input.display()))?;
@@ -205,6 +205,26 @@ fn execute_directory(
 
     let mut outcomes = Vec::new();
     let mut config_conflict = None;
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Batch-convert every content file up front (Phase 5's run-scoped
+    // `LabelRegistry` requires seeing every document before deciding any
+    // single one's ids — see this module's docs). `None` for a dry run or
+    // `--config-only`: nothing will be written, so there is no reason to
+    // read and convert content at all.
+    let batch: Option<ContentBatch> = if args.dry_run || args.config_only {
+        None
+    } else {
+        Some(run_content_batch(
+            &content_files,
+            canonical_input,
+            effective_output_root,
+            direction,
+        ))
+    };
+    if let Some(b) = &batch {
+        warnings.extend(b.warnings_ref().iter().cloned());
+    }
 
     if !args.no_config {
         for config_path in &config_files {
@@ -267,8 +287,18 @@ fn execute_directory(
                 continue;
             }
 
-            match run_conversion(content_path, &out_path, direction) {
-                Ok(()) => {
+            let batch = batch
+                .as_ref()
+                .expect("batch is Some whenever dry_run/config_only are false");
+            match batch.rendered().get(content_path) {
+                Some(text) => {
+                    if let Some(parent) = out_path.parent() {
+                        fs::create_dir_all(parent).with_context(|| {
+                            format!("could not create output directory {}", parent.display())
+                        })?;
+                    }
+                    write_atomic(&out_path, text.as_bytes())
+                        .with_context(|| format!("could not write {}", out_path.display()))?;
                     outcomes.push(FileOutcome {
                         input: content_path.clone(),
                         output: out_path.clone(),
@@ -280,11 +310,13 @@ fn execute_directory(
                         })?;
                     }
                 }
-                Err(e) => {
+                None => {
+                    let message = batch_error_message(batch.errors_ref(), content_path)
+                        .unwrap_or_else(|| "conversion failed for an unknown reason".to_string());
                     outcomes.push(FileOutcome {
                         input: content_path.clone(),
                         output: out_path,
-                        status: FileStatus::Failed(e.to_string()),
+                        status: FileStatus::Failed(message),
                     });
                     if args.in_place {
                         // Rule 4: stop the batch, do not touch further
@@ -308,6 +340,24 @@ fn execute_directory(
                 .context("asset copy failed")?,
             );
         }
+
+        if !args.dry_run {
+            if let Some(ContentBatch::MystToQuarto {
+                notebook_renames,
+                sidecar,
+                ..
+            }) = &batch
+            {
+                relabel_and_write_sidecar(
+                    args,
+                    canonical_input,
+                    effective_output_root,
+                    notebook_renames,
+                    sidecar,
+                    &mut warnings,
+                )?;
+            }
+        }
     }
 
     Ok(RunReport {
@@ -315,7 +365,178 @@ fn execute_directory(
         outcomes,
         assets: assets_report,
         config_conflict,
+        warnings,
     })
+}
+
+/// One direction's batch-conversion result, kept as an enum (rather than two
+/// separate `Option` fields) so a caller cannot accidentally read
+/// `notebook_renames`/`sidecar` — concepts that only exist for
+/// MyST->Quarto — while actually holding a Quarto->MyST result.
+enum ContentBatch {
+    MystToQuarto {
+        rendered: std::collections::BTreeMap<PathBuf, String>,
+        errors: Vec<BatchFileError>,
+        notebook_renames:
+            std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
+        sidecar: mystquarto_core::registry::sidecar::LabelSidecar,
+        warnings: Vec<String>,
+    },
+    QuartoToMyst {
+        rendered: std::collections::BTreeMap<PathBuf, String>,
+        errors: Vec<BatchFileError>,
+        warnings: Vec<String>,
+    },
+}
+
+impl ContentBatch {
+    fn rendered(&self) -> &std::collections::BTreeMap<PathBuf, String> {
+        match self {
+            ContentBatch::MystToQuarto { rendered, .. }
+            | ContentBatch::QuartoToMyst { rendered, .. } => rendered,
+        }
+    }
+    fn errors_ref(&self) -> &[BatchFileError] {
+        match self {
+            ContentBatch::MystToQuarto { errors, .. }
+            | ContentBatch::QuartoToMyst { errors, .. } => errors,
+        }
+    }
+    fn warnings_ref(&self) -> &[String] {
+        match self {
+            ContentBatch::MystToQuarto { warnings, .. }
+            | ContentBatch::QuartoToMyst { warnings, .. } => warnings,
+        }
+    }
+}
+
+/// Discovers notebooks and runs the direction-appropriate batch converter
+/// (`mystquarto_core::pipeline`). The content-file loop only ever needs
+/// `.rendered()`/`.errors_ref()` (uniform across both directions); it
+/// matches on the full enum only once, after the loop, to reach
+/// MyST->Quarto's notebook-relabelling and sidecar data — see
+/// [`relabel_and_write_sidecar`]'s call site.
+fn run_content_batch(
+    content_files: &[PathBuf],
+    canonical_input: &Path,
+    effective_output_root: &Path,
+    direction: Direction,
+) -> ContentBatch {
+    let notebooks = discover::discover_notebooks(canonical_input, Some(effective_output_root));
+
+    match direction {
+        Direction::MystToQuarto => {
+            let result =
+                pipeline::convert_myst_to_quarto_batch(content_files, &notebooks, canonical_input);
+            ContentBatch::MystToQuarto {
+                rendered: result.rendered,
+                errors: result.errors,
+                notebook_renames: result.notebook_renames,
+                sidecar: result.sidecar,
+                warnings: batch_warning_strings(result.warnings),
+            }
+        }
+        Direction::QuartoToMyst => {
+            let sidecar_path = canonical_input.join(SIDECAR_DIR).join(LABELS_FILE);
+            let sidecar_path = sidecar_path.exists().then_some(sidecar_path);
+            let result = pipeline::convert_quarto_to_myst_batch(
+                content_files,
+                &notebooks,
+                canonical_input,
+                sidecar_path.as_deref(),
+            );
+            ContentBatch::QuartoToMyst {
+                rendered: result.rendered,
+                errors: result.errors,
+                warnings: batch_warning_strings(result.warnings),
+            }
+        }
+    }
+}
+
+/// Relabels every notebook `notebook_renames` names (against its
+/// **output-tree** copy, already placed there by the asset copy that runs
+/// immediately before this is called) and merge-writes the label sidecar,
+/// unless `--no-label-map`.
+///
+/// Skips relabelling entirely — and skips writing the sidecar into a source
+/// tree — whenever `effective_output_root` **is or is inside**
+/// `canonical_input`, unless `--force` (Phase 5 spec's Risk Assessment:
+/// relabelling patches a file the user may consider a source input).
+///
+/// H1 fix: the original gate keyed only off `args.in_place`, so
+/// `myst2quarto . -o .` (or any `-o` aimed back at the input tree without
+/// `--in-place`) bypassed it entirely — every other in-place safety gate
+/// (the VCS check, the config-overwrite gate) is skipped too when
+/// `in_place` is false, but this is the one gate that must not be, because
+/// relabelling mutates a file regardless of which flag caused the output
+/// root to coincide with the input root. Checking the *actual* path
+/// relationship, not the flag that usually (but not always) causes it,
+/// closes that gap.
+fn relabel_and_write_sidecar(
+    args: &ConvertArgs,
+    canonical_input: &Path,
+    effective_output_root: &Path,
+    notebook_renames: &std::collections::BTreeMap<
+        PathBuf,
+        std::collections::BTreeMap<String, String>,
+    >,
+    sidecar_data: &mystquarto_core::registry::sidecar::LabelSidecar,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    let writes_into_source = path_guard::is_descendant(canonical_input, effective_output_root);
+    let refuse_relabel = writes_into_source && !args.force;
+
+    for (notebook_rel, renames) in notebook_renames {
+        if refuse_relabel {
+            warnings.push(format!(
+                "{}: notebook relabelling skipped because the output writes into the input \
+                 tree (pass --force to allow it); embed(s) referencing it may not resolve",
+                notebook_rel.display()
+            ));
+            continue;
+        }
+        let notebook_path = effective_output_root.join(notebook_rel);
+        let Ok(text) = fs::read_to_string(&notebook_path) else {
+            warnings.push(format!(
+                "{}: could not read notebook to relabel it (was it copied?)",
+                notebook_path.display()
+            ));
+            continue;
+        };
+        match notebook::relabel(&text, renames) {
+            Ok(relabelled) => {
+                write_atomic(&notebook_path, relabelled.as_bytes()).with_context(|| {
+                    format!("could not write relabelled {}", notebook_path.display())
+                })?;
+            }
+            Err(e) => warnings.push(format!(
+                "{}: could not relabel notebook: {e}",
+                notebook_path.display()
+            )),
+        }
+    }
+
+    if !args.no_label_map {
+        let sidecar_path = effective_output_root.join(SIDECAR_DIR).join(LABELS_FILE);
+        if refuse_relabel {
+            // Writing a sidecar into the source tree is the exact case
+            // `--no-label-map` exists for (see that flag's doc) — but we do
+            // not force the user to pass it too; skip silently is wrong
+            // (nothing-is-destroyed), so warn instead.
+            warnings.push(format!(
+                "{}: label sidecar not written because the output writes into the input tree \
+                 (pass --no-label-map to suppress this notice, or --force to write it anyway)",
+                sidecar_path.display()
+            ));
+        } else {
+            sidecar::write_merged(sidecar_data, &sidecar_path).with_context(|| {
+                format!("could not write label sidecar {}", sidecar_path.display())
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn execute_single_file(
@@ -342,6 +563,7 @@ fn execute_single_file(
             }],
             assets: None,
             config_conflict: None,
+            warnings: Vec::new(),
         });
     }
 
@@ -352,16 +574,53 @@ fn execute_single_file(
         )
     })?;
 
-    let status = match run_conversion(canonical_input_file, &out_path, direction) {
-        Ok(()) => {
+    // A lone file has no project root of its own; its parent directory is
+    // the natural scope for include/notebook resolution, matching how a
+    // relative `{include}`/`#nb:` target in the file would already be
+    // resolved on disk.
+    let input_root = canonical_input_file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let batch = run_content_batch(
+        std::slice::from_ref(&canonical_input_file.to_path_buf()),
+        &input_root,
+        effective_output_root,
+        direction,
+    );
+    let mut warnings: Vec<String> = batch.warnings_ref().to_vec();
+
+    let status = match batch.rendered().get(canonical_input_file) {
+        Some(text) => {
+            write_atomic(&out_path, text.as_bytes())
+                .with_context(|| format!("could not write {}", out_path.display()))?;
             if args.in_place && canonical_input_file != out_path && canonical_input_file.exists() {
                 fs::remove_file(canonical_input_file).with_context(|| {
                     format!("could not remove source {}", canonical_input_file.display())
                 })?;
             }
+            if let ContentBatch::MystToQuarto {
+                notebook_renames,
+                sidecar,
+                ..
+            } = &batch
+            {
+                relabel_and_write_sidecar(
+                    args,
+                    &input_root,
+                    effective_output_root,
+                    notebook_renames,
+                    sidecar,
+                    &mut warnings,
+                )?;
+            }
             FileStatus::Converted
         }
-        Err(e) => FileStatus::Failed(e.to_string()),
+        None => {
+            let message = batch_error_message(batch.errors_ref(), canonical_input_file)
+                .unwrap_or_else(|| "conversion failed for an unknown reason".to_string());
+            FileStatus::Failed(message)
+        }
     };
 
     Ok(RunReport {
@@ -373,6 +632,7 @@ fn execute_single_file(
         }],
         assets: None,
         config_conflict: None,
+        warnings,
     })
 }
 
@@ -515,12 +775,7 @@ mod tests {
     //! contract described in this module's docs. These call [`execute`]
     //! directly (rather than spawning a binary, which `tests/cli.rs` does
     //! for the Python-ported/black-box cases) so assertions can inspect
-    //! [`RunReport`] instead of only observable filesystem side effects —
-    //! in particular, the "stop the batch after the first failure" rule is
-    //! only precisely provable this way, since with `run_conversion`
-    //! stubbed to always fail, every file's *filesystem effect* is
-    //! identically "nothing happened" regardless of how many files were
-    //! attempted.
+    //! [`RunReport`] instead of only observable filesystem side effects.
 
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -606,9 +861,58 @@ mod tests {
         assert_eq!(
             content_outcomes.len(),
             2,
-            "every discovered content file should get an outcome even though \
-             conversion is stubbed to fail this phase, got {:?}",
+            "every discovered content file should get an outcome, got {:?}",
             report.outcomes
+        );
+        assert!(content_outcomes
+            .iter()
+            .all(|o| o.status == FileStatus::Converted));
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn output_pointed_at_the_input_tree_without_in_place_still_refuses_to_mutate_notebooks() {
+        // H1 regression: `-o` aimed back at (or inside) the input tree
+        // bypasses the clean-VCS gate and the config-overwrite gate, both
+        // of which key off `args.in_place` alone — but notebook
+        // relabelling and the sidecar write must *not* follow that same
+        // flag-only gate, because they mutate a file regardless of which
+        // flag caused the output root to land inside the input tree.
+        let tmp = tempdir("output-into-input-no-in-place");
+        fs::write(tmp.join("myst.yml"), "project:\n  title: Test\n").unwrap();
+        fs::write(
+            tmp.join("article.md"),
+            ":::{figure} #nb:analysis\n:label: fig:environment\n:::\n",
+        )
+        .unwrap();
+        let notebook_source =
+            "{\"cells\":[{\"cell_type\":\"code\",\"source\":[\"#| label: nb:analysis\\n\"]}]}";
+        fs::write(tmp.join("analysis.ipynb"), notebook_source).unwrap();
+
+        let mut args = base_args(tmp.clone());
+        args.output = Some(tmp.clone()); // -o pointed at the input tree itself
+        args.in_place = false; // the flag the original bug keyed off of
+        args.no_config = true; // isolate this test from the unrelated Phase 6 gap
+
+        let report = execute(&args, Direction::MystToQuarto).unwrap();
+        assert!(!report.has_failures(), "{:?}", report.outcomes);
+
+        // The source notebook must be byte-identical — never relabelled.
+        assert_eq!(
+            fs::read_to_string(tmp.join("analysis.ipynb")).unwrap(),
+            notebook_source
+        );
+        // No sidecar written into the source tree.
+        assert!(!tmp.join(".mystquarto").join("labels.json").exists());
+        // The skip is surfaced, not silent.
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("output writes into the input tree")),
+            "{:?}",
+            report.warnings
         );
 
         cleanup(&tmp);
@@ -617,7 +921,12 @@ mod tests {
     #[test]
     fn in_place_stops_the_batch_after_the_first_failure() {
         let tmp = tempdir("in-place-stop-on-failure");
-        write_myst_project(&tmp);
+        fs::write(tmp.join("myst.yml"), "project:\n  title: Test\n").unwrap();
+        // "broken.md" sorts alphabetically before "zzz.md" (discovery is
+        // sorted — see `discover.rs`), and is a genuine, real conversion
+        // failure: invalid UTF-8, which `std::fs::read_to_string` rejects.
+        fs::write(tmp.join("broken.md"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        fs::write(tmp.join("zzz.md"), "# Fine\n").unwrap();
 
         let mut args = base_args(tmp.clone());
         args.in_place = true;
@@ -636,12 +945,45 @@ mod tests {
              --in-place, got {:?}",
             report.outcomes
         );
-        assert!(tmp.join("intro.md").exists() || tmp.join("methods.md").exists());
-        // Neither source was actually converted (run_conversion is stubbed
-        // to always fail this phase), so rule 1 (delete-only-after-success)
-        // means neither was deleted.
-        assert!(tmp.join("intro.md").exists());
-        assert!(tmp.join("methods.md").exists());
+        assert!(matches!(content_outcomes[0].status, FileStatus::Failed(_)));
+        // "zzz.md" was never attempted (rule 4), so it is untouched.
+        assert!(tmp.join("zzz.md").exists());
+        // M2: "broken.md" itself — the file whose conversion actually
+        // failed — must also survive. Delete-only-after-success means a
+        // failed conversion never deletes its own source either; this was
+        // previously unasserted, the exact rule that mattered most before
+        // real conversion existed to fail.
+        assert!(
+            tmp.join("broken.md").exists(),
+            "a failed conversion must not delete its source"
+        );
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn in_place_deletes_the_source_only_after_its_output_is_written() {
+        // The positive half of the delete-only-after-success rule (M2):
+        // proven directly against the filesystem, not just against
+        // `intro.qmd` existing (which a stray leftover file could also
+        // satisfy).
+        let tmp = tempdir("in-place-deletes-after-success");
+        write_myst_project(&tmp);
+        init_clean_git_repo(&tmp);
+
+        let mut args = base_args(tmp.clone());
+        args.in_place = true;
+        args.no_config = true; // isolate from the unrelated Phase 6 gap
+        let report = execute(&args, Direction::MystToQuarto).unwrap();
+        assert!(!report.has_failures(), "{:?}", report.outcomes);
+
+        assert!(tmp.join("intro.qmd").exists());
+        assert!(
+            !tmp.join("intro.md").exists(),
+            "a successful in-place conversion must delete its source"
+        );
+        assert!(tmp.join("methods.qmd").exists());
+        assert!(!tmp.join("methods.md").exists());
 
         cleanup(&tmp);
     }

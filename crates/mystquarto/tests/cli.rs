@@ -280,12 +280,61 @@ mod convert_file {
     use super::*;
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks transformed content)"]
-    fn test_convert_single_file_myst_to_quarto() {}
+    fn test_convert_single_file_myst_to_quarto() {
+        let tmp = tempdir("convert-file-m2q");
+        fs::write(
+            tmp.join("doc.md"),
+            "# Hello\n\nSee {cite}`smith2020` for details.\n",
+        )
+        .unwrap();
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        let output_file = output_dir.join("doc.qmd");
+        assert!(output_file.exists());
+        let content = fs::read_to_string(&output_file).unwrap();
+        assert!(content.contains("[@smith2020]"));
+
+        cleanup(&tmp);
+    }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks transformed content)"]
-    fn test_convert_single_file_quarto_to_myst() {}
+    fn test_convert_single_file_quarto_to_myst() {
+        let tmp = tempdir("convert-file-q2m");
+        fs::write(
+            tmp.join("doc.qmd"),
+            "# Hello\n\nSee [@smith2020] for details.\n",
+        )
+        .unwrap();
+        let output_dir = tmp.join("output");
+
+        quarto2myst_cmd()
+            .arg(tmp.join("doc.qmd"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        let output_file = output_dir.join("doc.md");
+        assert!(output_file.exists());
+        let content = fs::read_to_string(&output_file).unwrap();
+        // Modern MyST v1 only (accepted decision): `[@smith2020]` is already
+        // correct MyST syntax and passes through unchanged — it does *not*
+        // become the legacy `{cite}`smith2020`` role. This intentionally
+        // diverges from the Python original's assertion, which expected the
+        // legacy form; see `docs/dialect-comparison.md` §10 and the plan's
+        // "modern MyST dialect" accepted decision.
+        assert!(content.contains("[@smith2020]"));
+        assert!(!content.contains("{cite}"));
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_convert_file_dry_run() {
@@ -307,7 +356,8 @@ mod convert_file {
     }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks frontmatter transform content)"]
+    #[ignore = "needs Phase 6 frontmatter mapping (kernelspec -> jupyter is not this phase's \
+                scope — QuartoWriter passes frontmatter through verbatim, see crate::writer docs)"]
     fn test_convert_file_with_frontmatter() {}
 
     #[test]
@@ -445,16 +495,81 @@ mod convert_directory {
     }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists with transformed content)"]
-    fn test_in_place_modifies_source() {}
+    fn test_in_place_modifies_source() {
+        let tmp = tempdir("convert-dir-in-place");
+        myst_project(&tmp);
+        // Requires a clean VCS state or --force (crate::orchestrate's
+        // in-place contract, absent from the Python original since that
+        // gate is this port's own addition — RT-06).
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-q", "-m", "initial"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+
+        // --no-config: config-file conversion is Phase 6's scope (not yet
+        // implemented — see `test_config_only`'s ignore reason), so a
+        // directory run here would otherwise fail on `myst.yml` alone even
+        // though every content file converts correctly.
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("--in-place")
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        let converted = tmp.join("intro.qmd");
+        assert!(converted.exists());
+        let content = fs::read_to_string(&converted).unwrap();
+        assert!(content.contains("[@smith2020]"));
+
+        cleanup(&tmp);
+    }
 
     #[test]
     #[ignore = "needs Phase 6 config conversion (checks _quarto.yml exists)"]
     fn test_config_only() {}
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists)"]
-    fn test_no_config() {}
+    fn test_no_config() {
+        let tmp = tempdir("convert-dir-no-config");
+        myst_project(&tmp);
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(!output_dir.join("_quarto.yml").exists());
+        assert!(output_dir.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_dry_run_no_writes() {
@@ -501,8 +616,22 @@ mod convert_directory {
     }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks output_file.exists())"]
-    fn test_single_file_path() {}
+    fn test_single_file_path() {
+        let tmp = tempdir("convert-dir-single-file-path");
+        fs::write(tmp.join("doc.md"), "# Hello\n\nSee {cite}`ref1`.\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        assert!(output_dir.join("doc.qmd").exists());
+
+        cleanup(&tmp);
+    }
 }
 
 // =======================================================================
@@ -513,12 +642,46 @@ mod myst2quarto_cli {
     use super::*;
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks doc.qmd exists)"]
-    fn test_myst2quarto_single_file() {}
+    fn test_myst2quarto_single_file() {
+        let tmp = tempdir("myst2quarto-single-file");
+        fs::write(tmp.join("doc.md"), "# Hello\n\nSee {cite}`ref1`.\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        assert!(output_dir.join("doc.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists)"]
-    fn test_myst2quarto_directory() {}
+    fn test_myst2quarto_directory() {
+        let tmp = tempdir("myst2quarto-directory");
+        myst_project(&tmp);
+        let mut os = tmp.as_os_str().to_os_string();
+        os.push("-out");
+        let output_dir = PathBuf::from(os);
+
+        // --no-config: see `test_in_place_modifies_source`'s comment.
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(output_dir.is_dir());
+        assert!(output_dir.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 
     #[test]
     fn test_nonexistent_path() {
@@ -535,13 +698,49 @@ mod myst2quarto_cli {
 // ignored — both need real converted content).
 // =======================================================================
 mod quarto2myst_cli {
-    #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks doc.md exists)"]
-    fn test_quarto2myst_single_file() {}
+    use super::*;
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.md exists)"]
-    fn test_quarto2myst_directory() {}
+    fn test_quarto2myst_single_file() {
+        let tmp = tempdir("quarto2myst-single-file");
+        fs::write(tmp.join("doc.qmd"), "# Hello\n\nSee [@ref1].\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        quarto2myst_cmd()
+            .arg(tmp.join("doc.qmd"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        assert!(output_dir.join("doc.md").exists());
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn test_quarto2myst_directory() {
+        let tmp = tempdir("quarto2myst-directory");
+        quarto_project(&tmp);
+        let mut os = tmp.as_os_str().to_os_string();
+        os.push("-out");
+        let output_dir = PathBuf::from(os);
+
+        // --no-config: see `test_in_place_modifies_source`'s comment.
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(output_dir.is_dir());
+        assert!(output_dir.join("intro.md").exists());
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 }
 
 // =======================================================================
@@ -552,12 +751,72 @@ mod cli_options {
     use super::*;
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists)"]
-    fn test_output_option() {}
+    fn test_output_option() {
+        let tmp = tempdir("cli-options-output");
+        myst_project(&tmp);
+        let output_dir = tmp.join("custom_output");
+
+        // --no-config: see `test_in_place_modifies_source`'s comment.
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(output_dir.exists());
+        assert!(output_dir.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists)"]
-    fn test_in_place_option() {}
+    fn test_in_place_option() {
+        let tmp = tempdir("cli-options-in-place");
+        myst_project(&tmp);
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-q", "-m", "initial"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+
+        // --no-config: config-file conversion is Phase 6's scope (not yet
+        // implemented — see `test_config_only`'s ignore reason), so a
+        // directory run here would otherwise fail on `myst.yml` alone even
+        // though every content file converts correctly.
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("--in-place")
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(tmp.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_dry_run() {
@@ -585,12 +844,44 @@ mod cli_options {
     fn test_config_only() {}
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks intro.qmd exists)"]
-    fn test_no_config() {}
+    fn test_no_config() {
+        let tmp = tempdir("cli-options-no-config");
+        myst_project(&tmp);
+        let output_dir = tmp.join("output");
+
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--no-config")
+            .assert()
+            .success();
+
+        assert!(!output_dir.join("_quarto.yml").exists());
+        assert!(output_dir.join("intro.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (expects exit_code==0 from a real successful conversion)"]
-    fn test_strict_mode() {}
+    fn test_strict_mode() {
+        let tmp = tempdir("cli-options-strict");
+        fs::write(tmp.join("doc.md"), "# Hello\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        // A conversion with nothing lossy in it succeeds under --strict —
+        // there is no diagnostics/warning-promotion system yet (Phase 7),
+        // so this only proves --strict does not itself break a clean run.
+        myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--strict")
+            .assert()
+            .success();
+
+        cleanup(&tmp);
+    }
 }
 
 // =======================================================================
@@ -601,12 +892,42 @@ mod main_subcommands {
     use super::*;
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks doc.qmd exists)"]
-    fn test_main_to_quarto_subcommand() {}
+    fn test_main_to_quarto_subcommand() {
+        let tmp = tempdir("main-to-quarto");
+        fs::write(tmp.join("doc.md"), "# Hello\n\nSee {cite}`ref1`.\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        mystquarto_cmd()
+            .arg("to-quarto")
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        assert!(output_dir.join("doc.qmd").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
-    #[ignore = "needs Phase 4/5 conversion logic (checks doc.md exists)"]
-    fn test_main_to_myst_subcommand() {}
+    fn test_main_to_myst_subcommand() {
+        let tmp = tempdir("main-to-myst");
+        fs::write(tmp.join("doc.qmd"), "# Hello\n\nSee [@ref1].\n").unwrap();
+        let output_dir = tmp.join("output");
+
+        mystquarto_cmd()
+            .arg("to-myst")
+            .arg(tmp.join("doc.qmd"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+
+        assert!(output_dir.join("doc.md").exists());
+
+        cleanup(&tmp);
+    }
 
     #[test]
     fn test_main_no_subcommand() {
