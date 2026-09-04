@@ -15,7 +15,7 @@ fn main() {
 
     match execute(&cli.args, Direction::MystToQuarto) {
         Ok(report) => {
-            let code = print_summary(&report, cli.args.dry_run);
+            let code = print_summary(&report, cli.args.dry_run, cli.args.strict);
             std::process::exit(code);
         }
         Err(err) => {

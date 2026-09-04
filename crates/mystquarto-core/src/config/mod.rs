@@ -29,18 +29,18 @@ pub use project_type::ProjectType;
 
 use crate::yaml::YamlValue;
 
-/// A non-fatal notice from config conversion — same shape rationale as
-/// [`crate::pipeline::BatchWarning`]: Phase 7 does not exist yet to assign
-/// these real diagnostic codes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigWarning {
-    pub message: String,
-}
+pub use crate::diagnostics::{Diagnostic, Severity};
 
-pub(crate) fn warn(message: impl Into<String>) -> ConfigWarning {
-    ConfigWarning {
-        message: message.into(),
-    }
+/// Builds a config-sourced [`Diagnostic`]. `span` defaults to line 1 (see
+/// [`crate::diagnostics`]'s module docs on why config/frontmatter-sourced
+/// diagnostics have no precise line number: neither `crate::yaml`'s parser
+/// nor `crate::yaml::surgery` track source positions).
+pub(crate) fn warn(
+    severity: Severity,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::new(severity, code, message)
 }
 
 /// Looks up `key` in an order-preserving parsed mapping — the shape

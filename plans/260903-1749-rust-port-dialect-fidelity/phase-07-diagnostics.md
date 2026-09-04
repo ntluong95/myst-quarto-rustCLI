@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: "Diagnostics & lossy preservation"
-status: pending
+status: done
 priority: P1
 effort: "4d"
 dependencies: [5, 6]
@@ -186,20 +186,114 @@ silence was earned.
 
 ## Success Criteria
 
-- [ ] `myst2quarto article-template/` emits a non-empty, accurate diagnostic list (D12)
-- [ ] Every diagnostic has file, line, code, and a reference section
-- [ ] Every lossy mapping row has a corpus case that triggers its code
-- [ ] `--strict` exits **0** on a correct `article-template/` conversion (RT-10)
-- [ ] `--strict` exits 1 when a genuine Warning-class loss occurs
-- [ ] `--strict=all` exits 1 on `article-template/` (expected-lossy present)
-- [ ] `suppress.toml` baselines a code and is honored
-- [ ] Preserved source lives in `.mystquarto/preserved.json`, never inline
-- [ ] The injection case renders with no executable markup and no stray `-->` (RT-02)
-- [ ] Round-trip recovers preserved constructs via Phase 4's reader (RT-11)
-- [ ] Diagnostic order is deterministic across runs
-- [ ] `docs/diagnostics.md` documents every emitted code
-- [ ] A clean conversion prints explicit zero counts
-- [ ] `--no-preserve` does not exist
+- [x] `myst2quarto article-template/` emits a non-empty, accurate diagnostic list (D12)
+- [x] Every diagnostic has file, line, code — `.reference` (the `docs/dialect-comparison.md`
+      section pointer) is never set on any construction site; a known, disclosed gap (M6)
+- [ ] Every lossy mapping row has a corpus case that triggers its code — deliberately
+      narrowed scope: ~20 codes exist for every site that *actually emits* a diagnostic
+      today, not one per `mappings.toml` row (57 lossy + 13 unmappable); see
+      `docs/diagnostics.md`'s "Scope note" and this phase's Review Outcome below
+- [x] `--strict` exits 1 when a genuine Warning-class loss occurs
+- [x] `--strict=all` exits 1 on `article-template/` (expected-lossy present)
+- [ ] `--strict` exits **0** on a correct `article-template/` conversion (RT-10) —
+      **accepted deviation**, see Review Outcome's H3 note: the fixture genuinely has
+      two DOI citation keys missing from `references.bib`, so `--strict` correctly
+      exits 1 there; the fixture is not "correct" in the sense this criterion assumed
+- [x] `suppress.toml` baselines a code and is honored — single-line `codes = [...]` form
+      only; a multi-line array is silently ignored (M1, deferred, documented below)
+- [x] Preserved source lives in `.mystquarto/preserved.json`, never inline — verified
+      against a real `quarto render`, including the injection case
+- [x] The injection case renders with no executable markup and no stray `-->` (RT-02) —
+      verified against a real `quarto render`
+- [x] Round-trip recovers preserved constructs via Phase 4's reader (RT-11) — verified
+      byte-identical, including through a cross-dialect hop (see C2 in Review Outcome)
+- [ ] Diagnostic order is deterministic across runs — sorts by `(file, line)` only;
+      two diagnostics at the same file:line with different codes/messages have no
+      guaranteed tiebreak (L2, deferred)
+- [x] `docs/diagnostics.md` documents every emitted code
+- [ ] A clean conversion prints explicit zero counts — true for Error/Warning/
+      LossyExpected; `Info`-severity diagnostics are never counted at all (M5, deferred)
+- [x] `--no-preserve` does not exist
+
+## Review Outcome (pre-completion code review)
+
+An adversarial review (mirroring Phases 5 and 6) found **3 Critical + 3 High + 7
+Medium + 8 Low** issues the initial implementation's 295 green tests did not catch.
+
+**Fixed this pass (Critical + High, user-scoped):**
+- Critical: `--in-place` could permanently destroy a preserved construct.
+  Moving unmappable content out of the document (into the sidecar) meant the
+  H1 "output writes into input tree ⇒ refuse without `--force`" gate, which
+  only blocked the *sidecar write*, no longer prevented the *source deletion*
+  `--in-place` performs immediately after — the content's only remaining copy
+  could vanish, exit 0. Fixed:
+  `orchestrate::refuse_if_in_place_would_lose_preserved_content` now refuses
+  the whole run, before anything is written or deleted, whenever this
+  combination is possible.
+- Critical: a preserved construct's content could be silently reinterpreted
+  as a different construct — and, if its body itself contained a code fence,
+  let trailing lines escape as live, unescaped markup — when restored during
+  a reverse conversion and reparsed through the *wrong* dialect's parser
+  (e.g. a backtick-fenced MyST directive reparsing as a Quarto executable
+  code cell). This is the injection class RT-02 exists to close, reopened by
+  a path the original regression test didn't cover. Fixed by recording which
+  dialect each sidecar entry was captured in
+  (`preserve::Dialect`/`PreservedEntry::dialect`) and refusing to ever
+  reparse foreign-dialect content — it now always round-trips byte-identical
+  instead.
+- Critical: a crafted directive/shortcode name could hijack which sidecar
+  entry an unrelated marker resolved to (the id-lookup needle,
+  `.mystquarto/preserved.json#`, wasn't excluded from the source-derived
+  `kind` text embedded in the marker, and resolution used the *first*
+  occurrence). Fixed: the needle is neutralized in `preserve::marker`, and
+  `reader::preservation_marker_id` additionally resolves from the *last*
+  occurrence as defense in depth.
+- High: `--strict <input>` (the flag before the positional — how the
+  previous `bool`-typed flag always worked) was a hard CLI parse error.
+  Fixed with `require_equals = true`.
+- High: the single most common preservation disposition (an unmappable
+  `myst.yml` config field) never actually emitted a diagnostic —
+  `--strict=all` passed "by accident" via unrelated citation warnings on
+  `article-template/`. Fixed: `myst_to_quarto::convert` now emits
+  `MQ0401`/`LossyExpected` whenever `preserved_fields` is non-empty.
+- High (H3): `--strict` exits 1 on `article-template/` itself, contradicting
+  this file's own stated criterion. Investigated and accepted as documented
+  above — the fixture's two DOI citation keys really are absent from
+  `references.bib`; the diagnostic is correct, the criterion's assumption
+  about the fixture was not.
+
+**Deferred (Medium + Low, explicit user decision — not fixed this pass):**
+`suppress.toml`'s hand-rolled parser only supports a single-line
+`codes = [...]` array; `suppress.toml` is looked up relative to a *file*
+path (not its parent directory) in single-file mode, so it's silently
+inert there; `MQ0202` was unreachable (the disposition it names — a
+restored, matching-dialect entry that doesn't collapse to one clean block —
+never actually emitted it; now moot in the sense that this path is rare by
+construction, but still worth a real diagnostic); `PreservedEntry.file`
+stores an absolute, machine-local path rather than one relative to the
+input root (a portability/reproducibility issue for a committed sidecar
+file); `Info`-severity diagnostics are never printed or counted, so a
+corrupted label sidecar currently produces zero observable output;
+`.reference` is unset on every diagnostic; the print-order sort has no
+tiebreaker; a stale preservation-sidecar entry is never pruned on a run
+that no longer produces any (config-field preservation is written
+unconditionally for exactly this reason; block-content preservation is
+not); one diagnostic code (`MQ0105`, before this pass's fix) was reused
+across three unrelated dispositions. None of these lose data or reintroduce
+injection on their own (unlike the three Criticals); each is a real but
+bounded gap, most already noted inline in `docs/diagnostics.md` or this
+file's Success Criteria above.
+
+Verified end-to-end after the fix: `cargo test --workspace` (299 pass, 0
+fail, 0 ignored), `cargo clippy --workspace --all-targets` clean, `cargo fmt
+--all -- --check` clean, plus direct reproductions of all three Criticals'
+exact failure scenarios (`--in-place` refusing rather than deleting;
+byte-identical restoration through a Quarto hop for a backtick-fenced
+directive whose body contains a fence and a `<script>`-adjacent live HTML
+tag, verified against a real `quarto render` producing no executable
+markup; two constructs whose marker `kind` collides with the sidecar
+needle restoring distinct, uncorrupted content) and a real `myst2quarto
+article-template/` → `quarto render --to html` run.
 
 ## Risk Assessment
 

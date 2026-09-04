@@ -10,7 +10,18 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+/// `--strict`'s optional value (reference §11, RD-4's four-class severity
+/// policy). Bare `--strict` promotes `Warning` (and `Error`, which already
+/// always fails); `--strict=all` additionally promotes `LossyExpected` —
+/// for a user who wants a fully faithful conversion or nothing. `Info`
+/// never fails a run, at either level.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrictLevel {
+    Warn,
+    All,
+}
 
 /// Flags shared by all three binaries for a single conversion invocation.
 /// The direction (MyST->Quarto vs. Quarto->MyST) is fixed by which binary,
@@ -52,12 +63,24 @@ pub struct ConvertArgs {
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
-    /// Treat warnings as errors. Accepted and stored this phase; there is
-    /// no warning collector yet to promote (Phase 7 owns diagnostics), so
-    /// it currently has no observable effect. Kept in the flag surface now
-    /// so Phase 7 is additive rather than a CLI-breaking change.
-    #[arg(long = "strict")]
-    pub strict: bool,
+    /// Fail the run on a genuine Warning-class (or worse) diagnostic —
+    /// `--strict=all` also fails on an expected-lossy (`LossyExpected`)
+    /// one, for a fully faithful-conversion-or-nothing run. Absent means
+    /// "print diagnostics, exit 0 unless a file actually failed."
+    ///
+    /// `require_equals` is load-bearing, not stylistic: without it, clap's
+    /// `num_args = 0..=1` greedily consumes the *next positional* as the
+    /// value (`myst2quarto --strict ./project` fails to parse — `./project`
+    /// is not `warn`/`all`), a hard break from this flag's previous `bool`
+    /// form where `--strict <input>` always worked.
+    #[arg(
+        long = "strict",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "warn",
+        require_equals = true
+    )]
+    pub strict: Option<StrictLevel>,
 
     /// Required alongside `--in-place` to bypass the hand-authored-config
     /// overwrite gate and the clean-VCS-state gate. See

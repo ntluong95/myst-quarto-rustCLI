@@ -14,7 +14,7 @@ blocks: []
 
 ## Overview
 
-Plan status: `in-progress`. Completed phases: 6/9.
+Plan status: `in-progress`. Completed phases: 7/9.
 
 Port `mystquarto` from Python to Rust, replacing the regex line-scanner with a
 typed document IR, and fixing the 16 verified defects catalogued in
@@ -83,7 +83,7 @@ carries the distribution and performance win.
 | 4 | [Readers: MyST + Quarto → IR](./phase-04-readers.md) | Done | 3 |
 | 5 | [Writers: IR → MyST + Quarto, label normalization](./phase-05-writers.md) | Done | 4 |
 | 6 | [Config & frontmatter mapping](./phase-06-config-frontmatter.md) | Done | 3, 4 |
-| 7 | [Diagnostics & lossy preservation](./phase-07-diagnostics.md) | Pending | 5, 6 |
+| 7 | [Diagnostics & lossy preservation](./phase-07-diagnostics.md) | Done | 5, 6 |
 | 8 | [Test corpus & renderer-backed validation](./phase-08-test-corpus.md) | Pending | 7 |
 | 9 | [Ship: packaging, CI, docs, Python removal](./phase-09-ship.md) | Pending | 8 |
 

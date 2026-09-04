@@ -21,7 +21,8 @@
 
 use crate::config::exports;
 use crate::config::quarto_to_myst::format_to_exports;
-use crate::config::{as_str, get, string_field, warn, ConfigWarning};
+use crate::config::{as_str, get, string_field, warn, Diagnostic, Severity};
+use crate::diagnostics::codes::config as codes;
 use crate::ir::Frontmatter;
 use crate::yaml::surgery::{apply_edits, FrontmatterEdit};
 use crate::yaml::YamlValue;
@@ -30,7 +31,7 @@ use crate::yaml::YamlValue;
 /// Every unrecognized key passes through untouched (both its value and its
 /// original YAML style).
 #[must_use]
-pub fn myst_to_quarto(fm: &Frontmatter) -> (String, Vec<ConfigWarning>) {
+pub fn myst_to_quarto(fm: &Frontmatter) -> (String, Vec<Diagnostic>) {
     let crate::yaml::YamlValue::Mapping(parsed) = &fm.parsed else {
         return (fm.raw.clone(), Vec::new());
     };
@@ -69,6 +70,8 @@ pub fn myst_to_quarto(fm: &Frontmatter) -> (String, Vec<ConfigWarning>) {
             key: "math".to_string(),
         });
         warnings.push(warn(
+            Severity::LossyExpected,
+            codes::FRONTMATTER_FIELD_DROPPED,
             "page frontmatter `math` (LaTeX macros) has no Quarto page-level equivalent; \
              dropped (reference §8.4)"
                 .to_string(),
@@ -80,6 +83,8 @@ pub fn myst_to_quarto(fm: &Frontmatter) -> (String, Vec<ConfigWarning>) {
             key: "label".to_string(),
         });
         warnings.push(warn(
+            Severity::LossyExpected,
+            codes::FRONTMATTER_FIELD_DROPPED,
             "page frontmatter `label` has no correct Quarto target yet (mapping it to `id` \
              would repeat a known-wrong behavior — Quarto ignores `id`); dropped rather than \
              mismapped (reference §8.4)"
@@ -160,7 +165,7 @@ pub fn myst_to_quarto(fm: &Frontmatter) -> (String, Vec<ConfigWarning>) {
 
 /// Converts a Quarto-sourced [`Frontmatter`]'s raw text to MyST's dialect.
 #[must_use]
-pub fn quarto_to_myst(fm: &Frontmatter) -> (String, Vec<ConfigWarning>) {
+pub fn quarto_to_myst(fm: &Frontmatter) -> (String, Vec<Diagnostic>) {
     let crate::yaml::YamlValue::Mapping(parsed) = &fm.parsed else {
         return (fm.raw.clone(), Vec::new());
     };

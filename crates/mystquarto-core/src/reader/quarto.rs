@@ -333,6 +333,11 @@ impl QuartoReader {
         }
     }
 
+    /// See `crate::reader::myst::MystReader::push_preserved_or_marker`'s
+    /// doc — identical fix, mirrored: this reader only ever reparses an
+    /// entry explicitly recorded as `Dialect::Quarto`; anything else
+    /// (`Dialect::Myst`, `Unknown`, or no entry at all) becomes an opaque
+    /// `Preserved` block, never passed to `self.parse_blocks`.
     fn push_preserved_or_marker(
         &self,
         out: &mut Vec<Block>,
@@ -340,7 +345,9 @@ impl QuartoReader {
         line: u32,
         blank: u8,
     ) -> Result<(), ReaderError> {
-        if let Some(original) = self.context.preserved.get(id) {
+        use crate::preserve::Dialect;
+
+        if let Some(original) = self.context.preserved.get_matching(id, Dialect::Quarto) {
             let refs: Vec<&str> = original.iter().map(String::as_str).collect();
             let parsed = self.parse_blocks(&refs, line)?;
             if parsed.len() == 1 {
@@ -355,6 +362,16 @@ impl QuartoReader {
                 BlockKind::Preserved {
                     original: original.clone(),
                     code: "preserved-sidecar",
+                },
+                line,
+                line,
+                blank,
+            ));
+        } else if let Some(original) = self.context.preserved.get(id) {
+            out.push(block(
+                BlockKind::Preserved {
+                    original: original.clone(),
+                    code: "preserved-foreign-dialect",
                 },
                 line,
                 line,

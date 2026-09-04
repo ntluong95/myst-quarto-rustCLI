@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use super::{
     as_mapping, as_sequence, as_str, exports, get, mapping_field, sequence_field, string_field,
-    warn, ConfigWarning, ProjectType,
+    warn, Diagnostic, ProjectType, Severity,
 };
 use crate::yaml::emit::{emit, render_field, EmitField, YamlDoc};
 use crate::yaml::{parse_mapping, YamlReadError, YamlValue};
@@ -63,7 +63,7 @@ const HANDLED_PROJECT_KEYS: &[&str] = &[
 pub struct ConversionResult {
     pub text: String,
     pub project_type: ProjectType,
-    pub warnings: Vec<ConfigWarning>,
+    pub warnings: Vec<Diagnostic>,
     pub preserved_fields: BTreeMap<String, YamlValue>,
 }
 
@@ -177,11 +177,15 @@ pub fn convert(
                 "bibliography",
                 YamlValue::String(bib_path.to_string()),
             ));
-            warnings.push(warn(format!(
-                "myst.yml has no `bibliography` key but {bib_path} exists in the conversion \
-                 set; synthesized `bibliography: {bib_path}` so citations resolve under Quarto \
-                 (reference RT-14)"
-            )));
+            warnings.push(warn(
+                Severity::Info,
+                crate::diagnostics::codes::bibliography::BIBLIOGRAPHY_SYNTHESIZED,
+                format!(
+                    "myst.yml has no `bibliography` key but {bib_path} exists in the conversion \
+                     set; synthesized `bibliography: {bib_path}` so citations resolve under \
+                     Quarto (reference RT-14)"
+                ),
+            ));
         }
     }
 
@@ -212,6 +216,8 @@ pub fn convert(
         (Some(b), Some(_)) => {
             fields.push(EmitField::new("image", YamlValue::String(b)));
             warnings.push(warn(
+                Severity::Warning,
+                crate::diagnostics::codes::config::BANNER_AND_THUMBNAIL_BOTH_SET,
                 "myst.yml has both banner and thumbnail; banner was used for _quarto.yml's \
                  image (reference §8.2)"
                     .to_string(),
@@ -281,6 +287,8 @@ pub fn convert(
         if !leftover.is_empty() {
             preserved_fields.insert("toc".to_string(), YamlValue::Sequence(leftover));
             warnings.push(warn(
+                Severity::LossyExpected,
+                crate::diagnostics::codes::config::MANUSCRIPT_TOC_ENTRY_PRESERVED,
                 "myst.yml project.toc has entries beyond the manuscript's article and \
                  notebooks (e.g. an appendix or supplement); Quarto's manuscript project shape \
                  has no equivalent, so they were preserved rather than dropped (reference §8.1)"
@@ -326,6 +334,27 @@ pub fn convert(
             continue;
         }
         preserved_fields.insert(format!("site.{key}"), value.clone());
+    }
+
+    if !preserved_fields.is_empty() {
+        // H2 fix: this is the single most common preservation disposition
+        // (every UNMAPPABLE_FIELDS entry, every unknown project.*/site.*
+        // key, `numbering` with no `equation.template`, and a Default-type
+        // `toc`, all land here) — it must carry a real diagnostic, not just
+        // the informational comment `text` gets below, or `--strict=all`
+        // can pass on a conversion that dropped real fields into the
+        // sidecar-only channel.
+        let mut keys: Vec<&str> = preserved_fields.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        warnings.push(warn(
+            Severity::LossyExpected,
+            crate::diagnostics::codes::config::UNMAPPABLE_FIELD_PRESERVED,
+            format!(
+                "myst.yml field(s) {} have no _quarto.yml equivalent; preserved as a comment \
+                 and in .mystquarto/preserved.json (reference §8.2)",
+                keys.join(", ")
+            ),
+        ));
     }
 
     let mut text = emit(&YamlDoc(fields));
@@ -480,6 +509,17 @@ mod tests {
         assert!(result.text.contains("#   CRISPR: gene editing"));
         assert_eq!(result.preserved_fields.len(), 4);
         assert!(result.preserved_fields.contains_key("abbreviations"));
+        // H2 regression: preserving a field must emit a real diagnostic,
+        // not just the informational comment — otherwise `--strict=all`
+        // has nothing to promote and passes on a conversion that dropped
+        // real data into the sidecar-only channel.
+        assert!(
+            result.warnings.iter().any(|w| w.code
+                == crate::diagnostics::codes::config::UNMAPPABLE_FIELD_PRESERVED
+                && w.severity == Severity::LossyExpected),
+            "{:?}",
+            result.warnings
+        );
     }
 
     #[test]

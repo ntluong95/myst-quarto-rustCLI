@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 pub use normalize::RefKind;
 
+use crate::diagnostics::{codes, Diagnostic, Severity};
 use crate::{Block, BlockKind, Document, Label};
 
 /// One entry collected from a document before normalization: which file it
@@ -31,15 +32,13 @@ struct RawLabel {
     kind: RefKind,
 }
 
-/// A non-fatal issue found while building the registry. Phase 7 does not
-/// exist yet to turn these into real `MQ01xx` diagnostics with codes and
-/// severities; this is the minimal shape a later diagnostics layer can
-/// convert without re-deriving the information (file + human-readable
-/// message is exactly what a `Diagnostic` needs).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegistryWarning {
-    pub file: PathBuf,
-    pub message: String,
+/// Builds a registry-sourced [`Diagnostic`], `span` defaulted to line 1
+/// (label collisions are detected registry-wide, after every document's
+/// been read, not at one line the registry itself tracks — the writer that
+/// actually emits the suffixed id does have a real span, but by then the
+/// collision has already been decided here).
+fn warn(code: &'static str, file: PathBuf, message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(Severity::Warning, code, message).with_file(file)
 }
 
 /// The run-scoped label registry. Built once, over every document in a
@@ -66,7 +65,7 @@ impl LabelRegistry {
     /// that run did not touch (the exact failure mode RT-08 reproduced
     /// against traversal-order suffixing).
     #[must_use]
-    pub fn build(documents: &[(PathBuf, Document)]) -> (Self, Vec<RegistryWarning>) {
+    pub fn build(documents: &[(PathBuf, Document)]) -> (Self, Vec<Diagnostic>) {
         let mut raw = Vec::new();
         for (source, doc) in documents {
             collect_labels(&doc.blocks, source, &mut raw);
@@ -105,14 +104,15 @@ impl LabelRegistry {
                     }
                     n += 1;
                 };
-                warnings.push(RegistryWarning {
-                    file: entry.source.clone(),
-                    message: format!(
+                warnings.push(warn(
+                    codes::label::COLLISION_DISAMBIGUATED,
+                    entry.source.clone(),
+                    format!(
                         "label `{}` normalizes to `{base}`, which is already taken \
                          in this conversion set; using `{suffixed}` instead",
                         entry.label.raw
                     ),
-                });
+                ));
                 suffixed
             };
 

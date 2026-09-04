@@ -10,8 +10,12 @@
 //! MyST->Quarto normalization problem, which does not exist in this
 //! direction.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::diagnostics::Diagnostic;
+use crate::preserve::PreservedEntry;
 use crate::reader::inline::InlineEvent;
 use crate::writer::{push_spacing, resolve_myst_label, RestoreMap};
 use crate::{AdmonitionKind, Block, BlockKind, Document, EmbedTarget, FigureSource, Label};
@@ -21,6 +25,11 @@ use crate::{AdmonitionKind, Block, BlockKind, Document, EmbedTarget, FigureSourc
 pub struct MystWriter<'a> {
     restore: &'a RestoreMap,
     known_labels: Vec<String>,
+    /// See [`crate::writer::quarto::QuartoWriter`]'s identical fields —
+    /// same accumulator role, shared [`crate::writer::render_preserved`]
+    /// mechanism.
+    preserved: RefCell<BTreeMap<String, PreservedEntry>>,
+    diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
 impl<'a> MystWriter<'a> {
@@ -44,6 +53,8 @@ impl<'a> MystWriter<'a> {
         Self {
             restore,
             known_labels,
+            preserved: RefCell::new(BTreeMap::new()),
+            diagnostics: RefCell::new(Vec::new()),
         }
     }
 
@@ -57,7 +68,10 @@ impl<'a> MystWriter<'a> {
     /// no-op, since a genuine MyST source document has no `jupyter`/`format`/
     /// `engine`/`crossref.eq-prefix` keys for it to touch.
     #[must_use]
-    pub fn write(&self, doc: &Document) -> (String, Vec<crate::config::ConfigWarning>) {
+    pub fn write(
+        &self,
+        doc: &Document,
+    ) -> (String, Vec<Diagnostic>, BTreeMap<String, PreservedEntry>) {
         let mut out = String::new();
         let mut warnings = Vec::new();
         if let Some(fm) = &doc.frontmatter {
@@ -82,7 +96,8 @@ impl<'a> MystWriter<'a> {
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        (out, warnings)
+        warnings.extend(self.diagnostics.take());
+        (out, warnings, self.preserved.take())
     }
 
     fn rewrite(&self, lines: &[String]) -> Vec<String> {
@@ -186,8 +201,66 @@ impl<'a> MystWriter<'a> {
             }
             BlockKind::Raw { format, body } => raw(format, body),
             BlockKind::BlockBreak => vec!["+++".to_string()],
+            // Empty `original` is the "missing-sidecar-entry"/"foreign
+            // dialect, but no real content to fall back to" degrade —
+            // `render_preserved` handles it (a fresh marker + a Warning
+            // diagnostic), see its docs. Non-empty is handled by the next
+            // arm.
+            BlockKind::Preserved { original, .. } if original.is_empty() => {
+                vec![crate::writer::render_preserved(
+                    &crate::writer::PreserveSink {
+                        preserved: &self.preserved,
+                        diagnostics: &self.diagnostics,
+                    },
+                    source,
+                    block.span,
+                    "content",
+                    crate::writer::PreservedDisposition {
+                        code: crate::diagnostics::codes::block::PRESERVED_RESTORED_OPAQUE,
+                        severity: crate::diagnostics::Severity::LossyExpected,
+                        dialect: crate::preserve::Dialect::Unknown,
+                    },
+                    original.clone(),
+                )]
+            }
+            // Non-empty `Preserved` content is native to *this* writer's
+            // dialect in every reachable pipeline path (C2 fix): a fresh
+            // `Unmappable` marker's `Dialect` is always the *reading*
+            // writer's own — `MystWriter` records `Quarto`, `QuartoWriter`
+            // records `Myst` (see each `Unmappable` arm below/in
+            // `writer::quarto`) — so a reader only ever finds a
+            // *foreign*-dialect entry for a marker its own writers wrote
+            // (never a matching one; see
+            // `crate::reader::myst::MystReader::push_preserved_or_marker`'s
+            // doc), and foreign-to-the-reader is native-to-the-writer in a
+            // two-dialect system. Verbatim passthrough here is therefore
+            // correct, not a missed opportunity to re-wrap it in a fresh
+            // marker. (The one case this doesn't cover — a hand-crafted
+            // input file containing a marker whose recorded dialect matches
+            // its *own* reader — reaches this arm with reader-native, not
+            // writer-native, content; unreachable through this tool's own
+            // writers, and still safe: `Preserved`'s `original` is never
+            // reparsed, so the worst outcome is literal foreign-dialect
+            // text appearing in the output, not silent corruption.)
             BlockKind::Preserved { original, .. } => original.clone(),
-            BlockKind::Unmappable { original, reason } => preserved(reason, original),
+            // `MystWriter`'s production caller (`convert_quarto_to_myst_batch`)
+            // only ever processes Quarto-sourced documents, so a fresh
+            // `Unmappable` block's `original` is always Quarto text.
+            BlockKind::Unmappable { original, reason } => vec![crate::writer::render_preserved(
+                &crate::writer::PreserveSink {
+                    preserved: &self.preserved,
+                    diagnostics: &self.diagnostics,
+                },
+                source,
+                block.span,
+                &crate::writer::preserved_kind(reason),
+                crate::writer::PreservedDisposition {
+                    code: crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED,
+                    severity: crate::diagnostics::Severity::LossyExpected,
+                    dialect: crate::preserve::Dialect::Quarto,
+                },
+                original.clone(),
+            )],
         }
     }
 
@@ -438,16 +511,6 @@ fn raw(format: &str, body: &[String]) -> Vec<String> {
     out
 }
 
-/// See `writer::quarto::preserved`'s docs — same RT-02 rationale: unmappable
-/// content goes inside a fenced code block, never an HTML comment, so it can
-/// never be interpreted as markup regardless of blank lines it contains.
-fn preserved(note: &str, original: &[String]) -> Vec<String> {
-    let mut out = vec![format!("% mystquarto: {note}"), "```text".to_string()];
-    out.extend(original.iter().cloned());
-    out.push("```".to_string());
-    out
-}
-
 /// Renders every `{name}`content`` form to **modern MyST**, never
 /// re-emitting the legacy spelling — this is the one function a grep-based
 /// test can point at to prove "no MyST output contains any legacy role."
@@ -496,7 +559,7 @@ mod tests {
         let doc = reader.read_str(input).unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         assert_eq!(out, input);
     }
 
@@ -524,7 +587,7 @@ mod tests {
         };
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         assert!(out.contains("kernelspec:"));
         assert!(out.contains("name: python3"));
         assert!(!out.contains("jupyter:"));
@@ -545,7 +608,7 @@ mod tests {
         };
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         assert_eq!(out.trim(), "See [@smith2020] here.");
         assert!(!out.contains("{cite}"));
     }
@@ -561,7 +624,7 @@ mod tests {
         let doc = reader.read_str(text).unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         for legacy in [
             "{cite}", "{cite:t}", "{cite:p}", "{numref}", "{ref}", "{eq}", "{doc}",
         ] {
@@ -594,7 +657,7 @@ mod tests {
             Label::new("fig:samples"),
         );
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         assert!(out.contains(":label: fig:samples"));
     }
 
@@ -611,7 +674,7 @@ mod tests {
             .unwrap();
         let restore = RestoreMap::new();
         let writer = MystWriter::new(&restore, Vec::new());
-        let (out, _) = writer.write(&doc);
+        let (out, _, _) = writer.write(&doc);
         assert_eq!(out.trim(), "% restored comment");
     }
 }

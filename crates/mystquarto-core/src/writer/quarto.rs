@@ -4,9 +4,12 @@
 //! which defect it closes and why the old Python transform lost the
 //! information.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::diagnostics::Diagnostic;
+use crate::preserve::PreservedEntry;
 use crate::reader::inline::InlineEvent;
 use crate::registry::normalize;
 use crate::writer::{known_reference_labels, push_spacing, rewrite_lines};
@@ -16,6 +19,14 @@ use crate::{AdmonitionKind, Block, BlockKind, Document, EmbedTarget, FigureSourc
 pub struct QuartoWriter<'a> {
     registry: &'a LabelRegistry,
     known_labels: Vec<String>,
+    /// Accumulated by [`crate::writer::render_preserved`] while rendering
+    /// one document — drained (not cleared-on-next-call state; see
+    /// `write`) at the end of [`write`](Self::write). A side channel rather
+    /// than a `render_block` parameter because `render_block` recurses
+    /// through many block kinds (admonitions, tab sets, block quotes, …)
+    /// and a preserved/unmappable construct can appear at any depth.
+    preserved: RefCell<BTreeMap<String, PreservedEntry>>,
+    diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
 impl<'a> QuartoWriter<'a> {
@@ -24,17 +35,24 @@ impl<'a> QuartoWriter<'a> {
         Self {
             registry,
             known_labels: known_reference_labels(registry),
+            preserved: RefCell::new(BTreeMap::new()),
+            diagnostics: RefCell::new(Vec::new()),
         }
     }
 
     /// Renders `doc` to a complete `.qmd` file's text, plus any non-fatal
-    /// notices from mapping its frontmatter (reference §8.4's `label`/`math`
-    /// drops — see [`crate::frontmatter::myst_to_quarto`]). Frontmatter is
-    /// mapped field-by-field — `kernelspec` -> `jupyter`/`engine`, `exports`
-    /// -> `format`, etc. — with every untouched key (critically `abstract`,
-    /// D9) surviving byte-identically.
+    /// diagnostics (frontmatter drops at §8.4, plus one per preserved
+    /// block — reference §11) and every preservation-sidecar entry a
+    /// preserved/unmappable block in `doc` produced (reference RD-2/RT-02;
+    /// see [`crate::preserve`]). Frontmatter is mapped field-by-field —
+    /// `kernelspec` -> `jupyter`/`engine`, `exports` -> `format`, etc. —
+    /// with every untouched key (critically `abstract`, D9) surviving
+    /// byte-identically.
     #[must_use]
-    pub fn write(&self, doc: &Document) -> (String, Vec<crate::config::ConfigWarning>) {
+    pub fn write(
+        &self,
+        doc: &Document,
+    ) -> (String, Vec<Diagnostic>, BTreeMap<String, PreservedEntry>) {
         let mut out = String::new();
         let mut warnings = Vec::new();
         if let Some(fm) = &doc.frontmatter {
@@ -59,7 +77,8 @@ impl<'a> QuartoWriter<'a> {
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        (out, warnings)
+        warnings.extend(self.diagnostics.take());
+        (out, warnings, self.preserved.take())
     }
 
     /// `source` is the file whose text is being rewritten — needed so a
@@ -161,11 +180,48 @@ impl<'a> QuartoWriter<'a> {
             BlockKind::BlockBreak => vec![
                 "<!-- mystquarto: MyST block break (+++) has no Quarto equivalent -->".to_string(),
             ],
-            BlockKind::Preserved { original, code } => preserved(
-                &format!("preserved ({code}); full sidecar recovery lands in Phase 7"),
-                original,
-            ),
-            BlockKind::Unmappable { original, reason } => preserved(reason, original),
+            // Empty `original` is the "missing-sidecar-entry"/"foreign
+            // dialect, but no real content to fall back to" degrade —
+            // `render_preserved` handles it (a fresh marker + a Warning
+            // diagnostic), see its docs. The non-empty arm right below
+            // passes through verbatim — see `writer::myst::MystWriter`'s
+            // identical arm for why that's correct (C2 fix).
+            BlockKind::Preserved { original, .. } if original.is_empty() => {
+                vec![crate::writer::render_preserved(
+                    &crate::writer::PreserveSink {
+                        preserved: &self.preserved,
+                        diagnostics: &self.diagnostics,
+                    },
+                    source,
+                    block.span,
+                    "content",
+                    crate::writer::PreservedDisposition {
+                        code: crate::diagnostics::codes::block::PRESERVED_RESTORED_OPAQUE,
+                        severity: crate::diagnostics::Severity::LossyExpected,
+                        dialect: crate::preserve::Dialect::Unknown,
+                    },
+                    original.clone(),
+                )]
+            }
+            BlockKind::Preserved { original, .. } => original.clone(),
+            // `QuartoWriter`'s sole caller (`convert_myst_to_quarto_batch`)
+            // only ever processes MyST-sourced documents, so a fresh
+            // `Unmappable` block's `original` is always MyST text.
+            BlockKind::Unmappable { original, reason } => vec![crate::writer::render_preserved(
+                &crate::writer::PreserveSink {
+                    preserved: &self.preserved,
+                    diagnostics: &self.diagnostics,
+                },
+                source,
+                block.span,
+                &crate::writer::preserved_kind(reason),
+                crate::writer::PreservedDisposition {
+                    code: crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED,
+                    severity: crate::diagnostics::Severity::LossyExpected,
+                    dialect: crate::preserve::Dialect::Myst,
+                },
+                original.clone(),
+            )],
         }
     }
 
@@ -594,30 +650,6 @@ fn raw(format: &str, body: &[String]) -> Vec<String> {
     out
 }
 
-/// Renders `original`'s content into a fenced, inert code block rather than
-/// an HTML comment (RT-02): a raw-HTML block in Pandoc/Quarto terminates at
-/// the first blank line, so unmappable multi-paragraph content wrapped in
-/// `<!-- ... -->` can escape the comment and be rendered as live markup —
-/// reproduced against `quarto 1.9.36` during red-team review. A fenced code
-/// block has no such escape: its content is always literal text, safe
-/// regardless of blank lines or embedded `<`/`>`/`-->`-like sequences.
-///
-/// This is a Phase 5 stopgap, not the full Phase 7 mechanism (a single-line
-/// marker plus a `.mystquarto/preserved.json` sidecar entry, so a later
-/// reverse conversion can restore the exact original `BlockKind`) — Phase 7
-/// does not exist yet. `note` is a short, single-line, non-user-controlled
-/// string; `original` (which may be attacker-influenced input) only ever
-/// goes inside the fence.
-fn preserved(note: &str, original: &[String]) -> Vec<String> {
-    let mut out = vec![
-        format!("<!-- mystquarto: {note} -->"),
-        "```text".to_string(),
-    ];
-    out.extend(original.iter().cloned());
-    out.push("```".to_string());
-    out
-}
-
 /// Renders every `{name}`content`` form (reference §5/§10 — both truly
 /// legacy roles and modern-but-still-`{name}`-shaped roles like `eval`/
 /// `del`/`abbr`) to its Quarto equivalent. Consolidated into one match
@@ -711,7 +743,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "## Data Analysis {#sec-data-analysis}");
     }
 
@@ -736,7 +768,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert_eq!(
             out.trim(),
             "![Collection methodology.](images/fruit-flies.png){#fig-samples}"
@@ -763,7 +795,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert!(out.contains("| A | B |"));
         assert!(out.contains(": Phenotypic variation. {#tbl-phenotypic-variation}"));
     }
@@ -787,7 +819,7 @@ mod tests {
         let docs = vec![(std::path::PathBuf::from("article.md"), doc)];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
 
         // Every bare cross-reference `@fig-x`/`@tbl-x`/`@sec-x`/`@eq-x` in
         // the rendered output must have a matching `{#id}` (or
@@ -881,7 +913,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         // The figure's own label (`fig:environment`) wins over the cell's
         // own name (`nb:analysis` -> `fig-analysis`) — see
         // `resolve_embed_id`'s docs on why there is only one id, not two.
@@ -912,7 +944,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "{{< embed analysis.ipynb#fig-analysis >}}");
     }
 
@@ -934,7 +966,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "See [@smith2020] for details.");
     }
 
@@ -956,7 +988,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert_eq!(out.trim(), "See [@10.1038/nmeth.1974].");
     }
 
@@ -984,7 +1016,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert!(out.starts_with("---\ntitle: Sample\nabstract: |\n  Line one.\n  Line two.\n---\n"));
         assert!(out.contains("Body."));
     }
@@ -1016,7 +1048,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert!(out.contains("jupyter: python3"));
         assert!(!out.contains("kernelspec"));
     }
@@ -1046,7 +1078,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert!(out.contains("```{python}"));
         assert!(out.contains("#| echo: false"));
         assert!(out.contains("x = 1"));
@@ -1080,7 +1112,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         assert!(
             !out.contains(".callout-important collapse=\"true\"}"),
             "an unescaped title must not be able to inject a second class/attribute, got:\n{out}"
@@ -1111,7 +1143,7 @@ mod tests {
         )];
         let registry = registry_for(&docs);
         let writer = QuartoWriter::new(&registry);
-        let (out, _) = writer.write(&docs[0].1);
+        let (out, _, _) = writer.write(&docs[0].1);
         // The escaped quote (`\"`, two characters: backslash then quote)
         // must appear on both sides of the escaped value — proving the
         // attribute's own delimiter quotes were not closed early by the

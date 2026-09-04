@@ -13,7 +13,8 @@
 
 use std::collections::BTreeSet;
 
-use super::{warn, ConfigWarning};
+use super::{warn, Diagnostic, Severity};
+use crate::diagnostics::codes::bibliography as codes;
 use crate::reader::inline::{scan_line, InlineEvent};
 use crate::{Block, BlockKind, Document};
 
@@ -102,14 +103,18 @@ fn collect(blocks: &[Block], known_labels: &[String], out: &mut BTreeSet<String>
 pub fn missing_citation_warnings(
     used: &BTreeSet<String>,
     bib_keys: &BTreeSet<String>,
-) -> Vec<ConfigWarning> {
+) -> Vec<Diagnostic> {
     used.difference(bib_keys)
         .map(|key| {
-            warn(format!(
-                "citation key `{key}` is used but defined in no reachable .bib file; MyST may \
-                 have resolved it live from a DOI (reference RT-14) — Quarto requires a local \
-                 bibliography entry, so this citation will render as literal text"
-            ))
+            warn(
+                Severity::Warning,
+                codes::CITATION_KEY_MISSING,
+                format!(
+                    "citation key `{key}` is used but defined in no reachable .bib file; MyST \
+                     may have resolved it live from a DOI (reference RT-14) — Quarto requires a \
+                     local bibliography entry, so this citation will render as literal text"
+                ),
+            )
         })
         .collect()
 }

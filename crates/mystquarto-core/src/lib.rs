@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod diagnostics;
 pub mod frontmatter;
 pub mod fs;
 pub mod ir;
@@ -13,12 +14,14 @@ pub mod label;
 pub mod mappings;
 pub mod notebook;
 pub mod pipeline;
+pub mod preserve;
 pub mod reader;
 pub mod registry;
 pub mod span;
 pub mod writer;
 pub mod yaml;
 
+pub use diagnostics::{Diagnostic, Severity};
 pub use ir::{
     AdmonitionKind, Attrs, Block, BlockKind, CellOptions, CommentStyle, Document, EmbedTarget,
     Engine, FigureSource, Frontmatter, IncludeOpts, TabItem,
@@ -32,6 +35,6 @@ pub use mappings::{
 pub use reader::{
     MystReader, NotebookCellIndex, PreservationStore, QuartoReader, ReaderContext, ReaderError,
 };
-pub use registry::{LabelRegistry, RefKind, RegistryWarning};
+pub use registry::{LabelRegistry, RefKind};
 pub use span::Span;
 pub use yaml::YamlValue;

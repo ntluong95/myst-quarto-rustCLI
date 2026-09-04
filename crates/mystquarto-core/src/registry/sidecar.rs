@@ -143,18 +143,11 @@ fn relative_key(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// A non-fatal issue found while reading or merging a sidecar. Same shape
-/// rationale as [`super::RegistryWarning`] — Phase 7 does not exist yet to
-/// assign real diagnostic codes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SidecarWarning {
-    pub message: String,
-}
-
-fn warn(message: impl Into<String>) -> SidecarWarning {
-    SidecarWarning {
-        message: message.into(),
-    }
+/// Builds a label-sidecar-sourced [`crate::Diagnostic`] at `Info` severity —
+/// every disposition here is "ignored, run proceeds as if absent," never a
+/// failure (see [`read_untrusted`]'s docs).
+fn warn(code: &'static str, message: impl Into<String>) -> crate::Diagnostic {
+    crate::Diagnostic::new(crate::Severity::Info, code, message)
 }
 
 /// Reads and validates the sidecar at `path` as **untrusted input** (RT-09):
@@ -178,28 +171,33 @@ fn warn(message: impl Into<String>) -> SidecarWarning {
 pub fn read_untrusted(
     path: &Path,
     expected_direction: &str,
-) -> (Option<LabelSidecar>, Vec<SidecarWarning>) {
+) -> (Option<LabelSidecar>, Vec<crate::Diagnostic>) {
+    use crate::diagnostics::codes::label as codes;
+
     let Ok(metadata) = fs::metadata(path) else {
         return (None, Vec::new());
     };
     if metadata.len() > MAX_SIDECAR_BYTES {
         return (
             None,
-            vec![warn(format!(
-                "{} is {} bytes, over the {MAX_SIDECAR_BYTES}-byte sidecar limit; ignoring it",
-                path.display(),
-                metadata.len()
-            ))],
+            vec![warn(
+                codes::LABEL_SIDECAR_REFUSED,
+                format!(
+                    "{} is {} bytes, over the {MAX_SIDECAR_BYTES}-byte sidecar limit; ignoring it",
+                    path.display(),
+                    metadata.len()
+                ),
+            )],
         );
     }
 
     let Ok(text) = fs::read_to_string(path) else {
         return (
             None,
-            vec![warn(format!(
-                "could not read {}; ignoring it",
-                path.display()
-            ))],
+            vec![warn(
+                codes::LABEL_SIDECAR_REFUSED,
+                format!("could not read {}; ignoring it", path.display()),
+            )],
         );
     };
 
@@ -208,10 +206,13 @@ pub fn read_untrusted(
         Err(e) => {
             return (
                 None,
-                vec![warn(format!(
-                    "{} is not a valid label sidecar ({e}); ignoring it",
-                    path.display()
-                ))],
+                vec![warn(
+                    codes::LABEL_SIDECAR_REFUSED,
+                    format!(
+                        "{} is not a valid label sidecar ({e}); ignoring it",
+                        path.display()
+                    ),
+                )],
             )
         }
     };
@@ -219,11 +220,14 @@ pub fn read_untrusted(
     if sidecar.version != 1 {
         return (
             None,
-            vec![warn(format!(
-                "{} has sidecar version {}, expected 1; ignoring it",
-                path.display(),
-                sidecar.version
-            ))],
+            vec![warn(
+                codes::LABEL_SIDECAR_REFUSED,
+                format!(
+                    "{} has sidecar version {}, expected 1; ignoring it",
+                    path.display(),
+                    sidecar.version
+                ),
+            )],
         );
     }
 
@@ -231,21 +235,27 @@ pub fn read_untrusted(
     if total_entries > MAX_SIDECAR_ENTRIES {
         return (
             None,
-            vec![warn(format!(
-                "{} has {total_entries} label entries, over the {MAX_SIDECAR_ENTRIES} limit; ignoring it",
-                path.display()
-            ))],
+            vec![warn(
+                codes::LABEL_SIDECAR_REFUSED,
+                format!(
+                    "{} has {total_entries} label entries, over the {MAX_SIDECAR_ENTRIES} limit; ignoring it",
+                    path.display()
+                ),
+            )],
         );
     }
 
     let mut warnings = Vec::new();
     if sidecar.direction != expected_direction {
-        warnings.push(warn(format!(
-            "{} was generated for direction `{}`, but this run is `{expected_direction}`; \
-             ignoring it (probably a stale sidecar from a prior run)",
-            path.display(),
-            sidecar.direction
-        )));
+        warnings.push(warn(
+            codes::LABEL_SIDECAR_REFUSED,
+            format!(
+                "{} was generated for direction `{}`, but this run is `{expected_direction}`; \
+                 ignoring it (probably a stale sidecar from a prior run)",
+                path.display(),
+                sidecar.direction
+            ),
+        ));
         return (None, warnings);
     }
 
@@ -253,9 +263,12 @@ pub fn read_untrusted(
         entry.labels.retain(|quarto_id, myst_label| {
             let ok = label_is_well_formed(quarto_id) && label_is_well_formed(myst_label);
             if !ok {
-                warnings.push(warn(format!(
-                    "{file}: dropping malformed sidecar entry `{quarto_id}` -> `{myst_label}`"
-                )));
+                warnings.push(warn(
+                    codes::LABEL_SIDECAR_ENTRY_DROPPED,
+                    format!(
+                        "{file}: dropping malformed sidecar entry `{quarto_id}` -> `{myst_label}`"
+                    ),
+                ));
             }
             ok
         });

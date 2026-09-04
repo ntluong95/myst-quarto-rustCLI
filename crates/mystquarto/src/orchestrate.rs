@@ -50,13 +50,15 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
+use mystquarto_core::diagnostics::{codes, Diagnostic, Severity};
 use mystquarto_core::fs::assets::{self, AssetCopyReport};
 use mystquarto_core::fs::atomic::write_atomic;
 use mystquarto_core::fs::path_guard;
-use mystquarto_core::pipeline::{self, BatchFileError, BatchWarning};
+use mystquarto_core::pipeline::{self, BatchFileError};
+use mystquarto_core::preserve::{self, PreservedEntry};
 use mystquarto_core::{notebook, registry::sidecar};
 
-use crate::args::ConvertArgs;
+use crate::args::{ConvertArgs, StrictLevel};
 use crate::discover::{self, Direction};
 
 /// Relative path (from an output root) of the label/preservation sidecar
@@ -64,6 +66,11 @@ use crate::discover::{self, Direction};
 const SIDECAR_DIR: &str = ".mystquarto";
 const LABELS_FILE: &str = "labels.json";
 const PRESERVED_CONFIG_FILE: &str = "preserved.json";
+/// A user-authored allowlist of diagnostic codes to drop from the report
+/// entirely (reference §11: "a `.mystquarto/suppress.toml` can baseline
+/// specific codes") — read from the *input* tree, since it documents the
+/// project's own accepted exceptions, not a per-run flag.
+const SUPPRESS_FILE: &str = "suppress.toml";
 
 /// What happened (or would happen) to one discovered file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,11 +106,14 @@ pub struct RunReport {
     /// inspect it manually. Never actually written (the existing file is
     /// left untouched instead); see `alongside_new_path`'s call site.
     pub config_conflict: Option<PathBuf>,
-    /// Non-fatal notices from the batch pipeline (label collisions, an
-    /// unreadable notebook, a stale/malformed sidecar, …) plus this
-    /// module's own (e.g. "notebook relabelling skipped under --in-place").
-    /// Phase 7 does not exist yet to give these real diagnostic codes.
-    pub warnings: Vec<String>,
+    /// Non-fatal diagnostics from the batch pipeline (label collisions, an
+    /// unreadable notebook, a stale/malformed sidecar, a preserved
+    /// construct, …) plus this module's own (e.g. "notebook relabelling
+    /// skipped under --in-place") — reference §11's `Diagnostic`, with real
+    /// severities and stable codes. A `.mystquarto/suppress.toml` entry has
+    /// already dropped any suppressed code by the time this is populated —
+    /// see [`execute`].
+    pub warnings: Vec<Diagnostic>,
 }
 
 impl RunReport {
@@ -116,8 +126,12 @@ impl RunReport {
             .count()
     }
 
-    /// `true` if this run should exit non-zero: any real (non-dry-run)
-    /// failure, or an unresolved config conflict.
+    /// `true` if this run should exit non-zero regardless of `--strict`:
+    /// any real (non-dry-run) file failure, or an unresolved config
+    /// conflict. Severity::Error-class diagnostics (see
+    /// `mystquarto_core::diagnostics::Severity`) already flow through this
+    /// path today via `FileStatus::Failed`, not a constructed `Diagnostic`
+    /// — see that type's docs.
     #[must_use]
     pub fn has_failures(&self) -> bool {
         self.config_conflict.is_some()
@@ -126,16 +140,20 @@ impl RunReport {
                 .iter()
                 .any(|o| matches!(o.status, FileStatus::Failed(_)))
     }
-}
 
-fn batch_warning_strings(warnings: Vec<BatchWarning>) -> Vec<String> {
-    warnings
-        .into_iter()
-        .map(|w| match w.file {
-            Some(f) => format!("{}: {}", f.display(), w.message),
-            None => w.message,
-        })
-        .collect()
+    /// `true` if `strict` promotes at least one diagnostic already in
+    /// `self.warnings` to a failure: bare `--strict` (`Warn`) promotes
+    /// `Severity::Warning` and above; `--strict=all` (`All`) also promotes
+    /// `Severity::LossyExpected`.
+    #[must_use]
+    pub fn has_promoted_diagnostics(&self, strict: Option<StrictLevel>) -> bool {
+        let Some(level) = strict else { return false };
+        let threshold = match level {
+            StrictLevel::Warn => Severity::Warning,
+            StrictLevel::All => Severity::LossyExpected,
+        };
+        self.warnings.iter().any(|d| d.severity >= threshold)
+    }
 }
 
 fn batch_error_message(errors: &[BatchFileError], file: &Path) -> Option<String> {
@@ -177,11 +195,49 @@ pub fn execute(args: &ConvertArgs, direction: Direction) -> Result<RunReport> {
         check_in_place_preconditions(&canonical_input, args.force)?;
     }
 
-    if is_dir {
-        execute_directory(args, direction, &canonical_input, &effective_output_root)
+    let mut report = if is_dir {
+        execute_directory(args, direction, &canonical_input, &effective_output_root)?
     } else {
-        execute_single_file(args, direction, &canonical_input, &effective_output_root)
+        execute_single_file(args, direction, &canonical_input, &effective_output_root)?
+    };
+
+    let suppressed = load_suppressed_codes(&canonical_input.join(SIDECAR_DIR).join(SUPPRESS_FILE));
+    if !suppressed.is_empty() {
+        report.warnings.retain(|d| !suppressed.contains(d.code));
     }
+
+    Ok(report)
+}
+
+/// Reads `.mystquarto/suppress.toml`'s `codes = ["MQ0410", ...]` array, as
+/// untrusted input like every other sidecar file in this crate: missing or
+/// unparseable degrades to "nothing suppressed," never a hard error. A
+/// hand-rolled parser for exactly this one shape (a single top-level
+/// string-array key) rather than a `toml` crate dependency — the format
+/// this file needs has no case a general TOML parser would handle that
+/// this does not.
+fn load_suppressed_codes(path: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Ok(text) = fs::read_to_string(path) else {
+        return out;
+    };
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let Some(rest) = line.strip_prefix("codes") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim().trim_start_matches('[').trim_end_matches(']');
+        for part in rest.split(',') {
+            let code = part.trim().trim_matches('"').trim_matches('\'').trim();
+            if !code.is_empty() {
+                out.insert(code.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn execute_directory(
@@ -208,7 +264,7 @@ fn execute_directory(
 
     let mut outcomes = Vec::new();
     let mut config_conflict = None;
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<Diagnostic> = Vec::new();
 
     // Batch-convert every content file up front (Phase 5's run-scoped
     // `LabelRegistry` requires seeing every document before deciding any
@@ -227,6 +283,12 @@ fn execute_directory(
     };
     if let Some(b) = &batch {
         warnings.extend(b.warnings_ref().iter().cloned());
+        refuse_if_in_place_would_lose_preserved_content(
+            args,
+            canonical_input,
+            effective_output_root,
+            b.preserved_entries_ref(),
+        )?;
     }
 
     if !args.no_config {
@@ -377,6 +439,15 @@ fn execute_directory(
                     &mut warnings,
                 )?;
             }
+            if let Some(b) = &batch {
+                write_preserved_content_sidecar(
+                    b.preserved_entries_ref(),
+                    args,
+                    canonical_input,
+                    effective_output_root,
+                    &mut warnings,
+                )?;
+            }
         }
     }
 
@@ -401,12 +472,14 @@ enum ContentBatch {
             std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
         sidecar: mystquarto_core::registry::sidecar::LabelSidecar,
         used_citation_keys: std::collections::BTreeSet<String>,
-        warnings: Vec<String>,
+        preserved_entries: std::collections::BTreeMap<String, PreservedEntry>,
+        warnings: Vec<Diagnostic>,
     },
     QuartoToMyst {
         rendered: std::collections::BTreeMap<PathBuf, String>,
         errors: Vec<BatchFileError>,
-        warnings: Vec<String>,
+        preserved_entries: std::collections::BTreeMap<String, PreservedEntry>,
+        warnings: Vec<Diagnostic>,
     },
 }
 
@@ -423,10 +496,20 @@ impl ContentBatch {
             | ContentBatch::QuartoToMyst { errors, .. } => errors,
         }
     }
-    fn warnings_ref(&self) -> &[String] {
+    fn warnings_ref(&self) -> &[Diagnostic] {
         match self {
             ContentBatch::MystToQuarto { warnings, .. }
             | ContentBatch::QuartoToMyst { warnings, .. } => warnings,
+        }
+    }
+    fn preserved_entries_ref(&self) -> &std::collections::BTreeMap<String, PreservedEntry> {
+        match self {
+            ContentBatch::MystToQuarto {
+                preserved_entries, ..
+            }
+            | ContentBatch::QuartoToMyst {
+                preserved_entries, ..
+            } => preserved_entries,
         }
     }
 }
@@ -455,7 +538,8 @@ fn run_content_batch(
                 notebook_renames: result.notebook_renames,
                 sidecar: result.sidecar,
                 used_citation_keys: result.used_citation_keys,
-                warnings: batch_warning_strings(result.warnings),
+                preserved_entries: result.preserved_entries,
+                warnings: result.warnings,
             }
         }
         Direction::QuartoToMyst => {
@@ -470,10 +554,95 @@ fn run_content_batch(
             ContentBatch::QuartoToMyst {
                 rendered: result.rendered,
                 errors: result.errors,
-                warnings: batch_warning_strings(result.warnings),
+                preserved_entries: result.preserved_entries,
+                warnings: result.warnings,
             }
         }
     }
+}
+
+/// **C1 fix.** Refuses the whole run *before any file is written or
+/// deleted* when this batch produced preserved block content, the
+/// preservation sidecar cannot be written (output writes into the input
+/// tree, no `--force`), and the run is `--in-place` — the one combination
+/// where [`write_preserved_content_sidecar`]'s ordinary "warn and skip"
+/// degrade is not safe: `--in-place` deletes each source file immediately
+/// after its output is written (see this module's docs, rule 1), so a
+/// preserved construct whose *only* record is the sidecar we just declined
+/// to write would be gone from the working tree entirely, with no warning
+/// strong enough to stop that from happening before it does. Every other
+/// mode (`-o` elsewhere, even one that happens to alias the input root)
+/// never deletes a source file, so the existing warn-and-skip in
+/// [`write_preserved_content_sidecar`] is sufficient there — this check
+/// exists only to run *before* that deletion, not to duplicate its policy.
+fn refuse_if_in_place_would_lose_preserved_content(
+    args: &ConvertArgs,
+    canonical_input: &Path,
+    effective_output_root: &Path,
+    entries: &std::collections::BTreeMap<String, PreservedEntry>,
+) -> Result<()> {
+    if !args.in_place || args.force || entries.is_empty() {
+        return Ok(());
+    }
+    // `--in-place` means `effective_output_root == canonical_input`, so
+    // this is always true here — computed explicitly anyway so the
+    // condition reads the same way as every other sidecar-refusal gate in
+    // this module, rather than relying on that equivalence silently.
+    let writes_into_source = path_guard::is_descendant(canonical_input, effective_output_root);
+    if writes_into_source {
+        bail!(
+            "--in-place refuses to run: {} construct(s) in this conversion set have no target \
+             in the other dialect and would be recorded only in .mystquarto/preserved.json, \
+             but that sidecar cannot be written without --force. Proceeding would delete each \
+             source file immediately after conversion, permanently losing this content. Pass \
+             --force to write the sidecar and proceed.",
+            entries.len()
+        );
+    }
+    Ok(())
+}
+
+/// Merge-writes `entries` (this run's block-preservation sidecar data — see
+/// `mystquarto_core::preserve`) at the output root, under the same
+/// output-writes-into-source-tree refusal gate as
+/// [`relabel_and_write_sidecar`]'s label sidecar (same Risk Assessment
+/// rationale: it mutates a sidecar file, not build output, so it must not
+/// silently patch the input tree without `--force`). Safe to warn-and-skip
+/// here (rather than fail) in every mode except `--in-place`, which
+/// [`refuse_if_in_place_would_lose_preserved_content`] already refused
+/// earlier, before any source file could have been deleted. A no-op — no
+/// warning — when `entries` is empty, unlike the config-field sidecar
+/// (`mystquarto_core::config::sidecar`, always written to clear stale
+/// fields): this is additive per-run data, not a fixed field set, so an
+/// empty run genuinely has nothing new to record.
+fn write_preserved_content_sidecar(
+    entries: &std::collections::BTreeMap<String, PreservedEntry>,
+    args: &ConvertArgs,
+    canonical_input: &Path,
+    effective_output_root: &Path,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let writes_into_source = path_guard::is_descendant(canonical_input, effective_output_root);
+    if writes_into_source && !args.force {
+        warnings.push(Diagnostic::new(
+            Severity::Warning,
+            codes::block::PRESERVATION_SIDECAR_NOT_WRITTEN,
+            "preservation sidecar not written because the output writes into the input tree \
+             (pass --force to write it anyway); a preserved construct's marker will not \
+             resolve on a later reverse conversion"
+                .to_string(),
+        ));
+        return Ok(());
+    }
+    let path = effective_output_root
+        .join(SIDECAR_DIR)
+        .join(PRESERVED_CONFIG_FILE);
+    preserve::write_entries(entries, &path)
+        .with_context(|| format!("could not write preservation sidecar {}", path.display()))?;
+    Ok(())
 }
 
 /// Converts one config file (`myst.yml`/`_quarto.yml`) and returns its
@@ -496,9 +665,14 @@ fn convert_config_file(
     canonical_input: &Path,
     effective_output_root: &Path,
     batch: &Option<ContentBatch>,
-) -> Result<(String, Vec<String>)> {
+) -> Result<(String, Vec<Diagnostic>)> {
     let text = fs::read_to_string(config_path)
         .with_context(|| format!("could not read {}", config_path.display()))?;
+    let with_file = |ds: Vec<Diagnostic>| -> Vec<Diagnostic> {
+        ds.into_iter()
+            .map(|d| d.with_file(config_path.to_path_buf()))
+            .collect()
+    };
 
     match direction {
         Direction::MystToQuarto => {
@@ -507,8 +681,7 @@ fn convert_config_file(
                 mystquarto_core::config::myst_to_quarto::convert(&text, bib_path.as_deref())
                     .map_err(|e| anyhow::anyhow!("{}: {e}", config_path.display()))?;
 
-            let mut warnings: Vec<String> =
-                result.warnings.into_iter().map(|w| w.message).collect();
+            let mut warnings: Vec<Diagnostic> = with_file(result.warnings);
 
             // Written unconditionally, even when empty: this sidecar is the
             // authoritative recovery channel (RT-11), so a run that removes
@@ -531,14 +704,12 @@ fn convert_config_file(
                 if let Ok(bib_text) = fs::read_to_string(canonical_input.join(bib_rel)) {
                     let defined =
                         mystquarto_core::config::bibliography::bib_defined_keys(&bib_text);
-                    warnings.extend(
+                    warnings.extend(with_file(
                         mystquarto_core::config::bibliography::missing_citation_warnings(
                             used_citation_keys,
                             &defined,
-                        )
-                        .into_iter()
-                        .map(|w| w.message),
-                    );
+                        ),
+                    ));
                 }
             }
 
@@ -557,10 +728,7 @@ fn convert_config_file(
             let result =
                 mystquarto_core::config::quarto_to_myst::convert(&text, preserved.as_ref())
                     .map_err(|e| anyhow::anyhow!("{}: {e}", config_path.display()))?;
-            Ok((
-                result.text,
-                result.warnings.into_iter().map(|w| w.message).collect(),
-            ))
+            Ok((result.text, with_file(result.warnings)))
         }
     }
 }
@@ -613,26 +781,35 @@ fn relabel_and_write_sidecar(
         std::collections::BTreeMap<String, String>,
     >,
     sidecar_data: &mystquarto_core::registry::sidecar::LabelSidecar,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<Diagnostic>,
 ) -> Result<()> {
     let writes_into_source = path_guard::is_descendant(canonical_input, effective_output_root);
     let refuse_relabel = writes_into_source && !args.force;
 
     for (notebook_rel, renames) in notebook_renames {
         if refuse_relabel {
-            warnings.push(format!(
-                "{}: notebook relabelling skipped because the output writes into the input \
-                 tree (pass --force to allow it); embed(s) referencing it may not resolve",
-                notebook_rel.display()
-            ));
+            warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::label::RELABEL_SKIPPED_OUTPUT_IN_INPUT_TREE,
+                    "notebook relabelling skipped because the output writes into the input \
+                     tree (pass --force to allow it); embed(s) referencing it may not resolve"
+                        .to_string(),
+                )
+                .with_file(notebook_rel.clone()),
+            );
             continue;
         }
         let notebook_path = effective_output_root.join(notebook_rel);
         let Ok(text) = fs::read_to_string(&notebook_path) else {
-            warnings.push(format!(
-                "{}: could not read notebook to relabel it (was it copied?)",
-                notebook_path.display()
-            ));
+            warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::io::NOTEBOOK_RELABEL_FAILED,
+                    "could not read notebook to relabel it (was it copied?)".to_string(),
+                )
+                .with_file(notebook_path.clone()),
+            );
             continue;
         };
         match notebook::relabel(&text, renames) {
@@ -641,10 +818,14 @@ fn relabel_and_write_sidecar(
                     format!("could not write relabelled {}", notebook_path.display())
                 })?;
             }
-            Err(e) => warnings.push(format!(
-                "{}: could not relabel notebook: {e}",
-                notebook_path.display()
-            )),
+            Err(e) => warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::io::NOTEBOOK_RELABEL_FAILED,
+                    format!("could not relabel notebook: {e}"),
+                )
+                .with_file(notebook_path.clone()),
+            ),
         }
     }
 
@@ -655,11 +836,17 @@ fn relabel_and_write_sidecar(
             // `--no-label-map` exists for (see that flag's doc) — but we do
             // not force the user to pass it too; skip silently is wrong
             // (nothing-is-destroyed), so warn instead.
-            warnings.push(format!(
-                "{}: label sidecar not written because the output writes into the input tree \
-                 (pass --no-label-map to suppress this notice, or --force to write it anyway)",
-                sidecar_path.display()
-            ));
+            warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::label::RELABEL_SKIPPED_OUTPUT_IN_INPUT_TREE,
+                    "label sidecar not written because the output writes into the input tree \
+                     (pass --no-label-map to suppress this notice, or --force to write it \
+                     anyway)"
+                        .to_string(),
+                )
+                .with_file(sidecar_path.clone()),
+            );
         } else {
             sidecar::write_merged(sidecar_data, &sidecar_path).with_context(|| {
                 format!("could not write label sidecar {}", sidecar_path.display())
@@ -719,7 +906,13 @@ fn execute_single_file(
         effective_output_root,
         direction,
     );
-    let mut warnings: Vec<String> = batch.warnings_ref().to_vec();
+    let mut warnings: Vec<Diagnostic> = batch.warnings_ref().to_vec();
+    refuse_if_in_place_would_lose_preserved_content(
+        args,
+        &input_root,
+        effective_output_root,
+        batch.preserved_entries_ref(),
+    )?;
 
     let status = match batch.rendered().get(canonical_input_file) {
         Some(text) => {
@@ -745,6 +938,13 @@ fn execute_single_file(
                     &mut warnings,
                 )?;
             }
+            write_preserved_content_sidecar(
+                batch.preserved_entries_ref(),
+                args,
+                &input_root,
+                effective_output_root,
+                &mut warnings,
+            )?;
             FileStatus::Converted
         }
         None => {
@@ -825,9 +1025,17 @@ fn default_output_dir(input_dir: &Path, direction: Direction) -> PathBuf {
 /// `_run_conversion` output closely enough to be recognizable, not
 /// byte-for-byte — the phase spec asks for *documented* semantics, not
 /// output-format parity) and returns the process exit code the caller
-/// should use: `0` for a `--dry-run` invocation regardless of what it
-/// would have done, otherwise `0` unless [`RunReport::has_failures`].
-pub fn print_summary(report: &RunReport, dry_run: bool) -> i32 {
+/// should use: `0` for a `--dry-run` invocation regardless of what it would
+/// have done, otherwise `0` unless [`RunReport::has_failures`] or `strict`
+/// promotes at least one diagnostic (reference §11, RD-4).
+///
+/// `Info`-severity diagnostics are counted but not individually printed —
+/// they document routine, always-correct behavior (a label normalized, a
+/// sidecar absent on a reverse conversion with none expected), and printing
+/// one per label would drown out the warnings/lossy lines that matter. Every
+/// count still prints, including a `0` for a class with nothing to report —
+/// "a visible `0 warnings` is the signal that silence was earned."
+pub fn print_summary(report: &RunReport, dry_run: bool, strict: Option<StrictLevel>) -> i32 {
     if dry_run {
         let mut count = 0;
         for outcome in &report.outcomes {
@@ -853,15 +1061,57 @@ pub fn print_summary(report: &RunReport, dry_run: bool) -> i32 {
     if let Some(conflict) = &report.config_conflict {
         eprintln!("  config conflict: would write {}", conflict.display());
     }
-    // Non-fatal notices (label collisions, RT-14's bibliography/citation
-    // diagnostics, …) were silently collected but never surfaced before
-    // this — Phase 7 owns real severity classes and `--strict` gating, but
-    // printing what was already computed needs neither.
-    for warning in &report.warnings {
-        eprintln!("  warning: {warning}");
+
+    // Deterministic order (reference §11's requirement): (file, line), with
+    // no-file diagnostics (a run-scoped sidecar notice) sorting first.
+    let mut printable: Vec<&Diagnostic> = report
+        .warnings
+        .iter()
+        .filter(|d| d.severity != Severity::Info)
+        .collect();
+    printable.sort_by(|a, b| (&a.file, a.span.start_line).cmp(&(&b.file, b.span.start_line)));
+    for d in &printable {
+        let loc = d.file.as_ref().map_or_else(
+            || "-".to_string(),
+            |f| format!("{}:{}", f.display(), d.span.start_line),
+        );
+        eprintln!("{loc}: {}[{}]: {}", d.severity.label(), d.code, d.message);
+        if let Some(r) = d.reference {
+            eprintln!("    see docs/dialect-comparison.md {r}");
+        }
+        if let Some(id) = &d.preserved {
+            eprintln!("    preserved in .mystquarto/preserved.json#{id}");
+        }
     }
 
-    i32::from(report.has_failures())
+    let error_count = report
+        .outcomes
+        .iter()
+        .filter(|o| matches!(o.status, FileStatus::Failed(_)))
+        .count()
+        + usize::from(report.config_conflict.is_some());
+    let warning_count = report
+        .warnings
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .count();
+    let lossy_count = report
+        .warnings
+        .iter()
+        .filter(|d| d.severity == Severity::LossyExpected)
+        .count();
+    eprintln!(
+        "Converted {} file(s): {error_count} error(s), {warning_count} warning(s), \
+         {lossy_count} expected-lossy.",
+        report.converted_count()
+    );
+    if strict.is_none() {
+        eprintln!(
+            "Run with --strict to fail on warnings, --strict=all to fail on expected-lossy too."
+        );
+    }
+
+    i32::from(report.has_failures() || report.has_promoted_diagnostics(strict))
 }
 
 /// Rule 3 of the `--in-place` contract: require a clean VCS state, or
@@ -947,7 +1197,7 @@ mod tests {
             config_only: false,
             no_config: false,
             dry_run: false,
-            strict: false,
+            strict: None,
             force: false,
             no_label_map: false,
         }
@@ -1048,7 +1298,7 @@ mod tests {
             report
                 .warnings
                 .iter()
-                .any(|w| w.contains("output writes into the input tree")),
+                .any(|w| w.message.contains("output writes into the input tree")),
             "{:?}",
             report.warnings
         );
@@ -1122,6 +1372,71 @@ mod tests {
         );
         assert!(tmp.join("methods.qmd").exists());
         assert!(!tmp.join("methods.md").exists());
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn in_place_refuses_rather_than_lose_preserved_content_without_force() {
+        // C1 regression: `--in-place` deletes each source file immediately
+        // after its own output is written (rule 1) — combined with the
+        // ordinary "warn and skip" degrade the preservation sidecar write
+        // uses everywhere else, this used to delete the only copy of an
+        // unmappable construct's original source with no recovery path,
+        // exit 0. The whole run must now refuse up front instead, before
+        // anything is written or deleted.
+        let tmp = tempdir("in-place-preserve-refuse");
+        fs::write(tmp.join("myst.yml"), "project:\n  title: Test\n").unwrap();
+        fs::write(
+            tmp.join("a.md"),
+            "# H\n\n:::{glossary}\nIRREPLACEABLE\n:::\n",
+        )
+        .unwrap();
+        init_clean_git_repo(&tmp);
+
+        let mut args = base_args(tmp.clone());
+        args.in_place = true;
+        args.no_config = true;
+        let err = execute(&args, Direction::MystToQuarto)
+            .expect_err("must refuse rather than risk losing preserved content");
+        assert!(format!("{err}").contains("preserved.json"), "{err}");
+
+        // Nothing was touched: the source survives, untouched, with its
+        // original content intact.
+        assert_eq!(
+            fs::read_to_string(tmp.join("a.md")).unwrap(),
+            "# H\n\n:::{glossary}\nIRREPLACEABLE\n:::\n"
+        );
+        assert!(!tmp.join("a.qmd").exists());
+        assert!(!tmp.join(".mystquarto").join("preserved.json").exists());
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn in_place_with_force_writes_the_preservation_sidecar_and_proceeds() {
+        let tmp = tempdir("in-place-preserve-force");
+        fs::write(tmp.join("myst.yml"), "project:\n  title: Test\n").unwrap();
+        fs::write(
+            tmp.join("a.md"),
+            "# H\n\n:::{glossary}\nIRREPLACEABLE\n:::\n",
+        )
+        .unwrap();
+        init_clean_git_repo(&tmp);
+
+        let mut args = base_args(tmp.clone());
+        args.in_place = true;
+        args.force = true;
+        args.no_config = true;
+        let report = execute(&args, Direction::MystToQuarto).unwrap();
+        assert!(!report.has_failures(), "{:?}", report.outcomes);
+
+        assert!(
+            !tmp.join("a.md").exists(),
+            "a successful conversion deletes its source"
+        );
+        let sidecar = fs::read_to_string(tmp.join(".mystquarto").join("preserved.json")).unwrap();
+        assert!(sidecar.contains("IRREPLACEABLE"));
 
         cleanup(&tmp);
     }

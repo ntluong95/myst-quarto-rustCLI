@@ -10,35 +10,20 @@
 //! that sidecar's per-file, content-hash-gated shape solves a per-document
 //! staleness problem this one does not have (a project has exactly one
 //! `myst.yml`/`_quarto.yml`) — reusing its shape here would carry machinery
-//! (per-file keys, content hashing) this narrower problem does not need. Both
-//! sidecars are expected to eventually share the `.mystquarto/preserved.json`
-//! *file* once Phase 7 adds block-level preservation there too (see the
-//! parent module's docs) under a section this one does not occupy.
+//! (per-file keys, content hashing) this narrower problem does not need.
+//!
+//! This module owns the `fields` section of `.mystquarto/preserved.json`;
+//! [`crate::preserve`] owns the `entries` section (block-level preservation)
+//! and the file's actual read/write/merge logic — see that module's docs.
+//! [`read`]/[`write`] here are thin, config-domain-typed wrappers over it.
 
-use std::fs;
 use std::path::Path;
 
-use crate::fs::atomic::write_atomic;
+use crate::preserve::PreservedSidecar;
 use crate::yaml::YamlValue;
 
-/// Bytes above which a sidecar is refused outright — mirrors
-/// [`crate::registry::sidecar::MAX_SIDECAR_BYTES`]'s rationale, scaled down:
-/// a config-field preservation set is at most a couple dozen entries, so this
-/// is a generous circuit breaker, not a limit any legitimate project
-/// approaches.
-pub const MAX_SIDECAR_BYTES: u64 = 1024 * 1024;
-
-/// The on-disk shape. `fields` is a plain JSON object rather than
-/// [`YamlValue`] directly (which has no `Serialize`/`Deserialize` impl, by
-/// design — see that type's docs) — [`yaml_to_json`]/[`json_to_yaml`] bridge
-/// the two for exactly the closed set of shapes §8.2's unmappable fields
-/// actually take (strings, a bool, and a string-keyed mapping for
-/// `abbreviations`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PreservedConfig {
-    pub version: u32,
-    pub fields: std::collections::BTreeMap<String, serde_json::Value>,
-}
+#[cfg(test)]
+use std::fs;
 
 /// Converts a config-field [`YamlValue`] to JSON for storage. Handles every
 /// variant (not just the ones §8.2's fields currently use) so a future field
@@ -91,45 +76,28 @@ pub fn json_to_yaml(v: &serde_json::Value) -> YamlValue {
 /// file, oversized, malformed JSON, unexpected version — is treated as "no
 /// sidecar," never a hard error: a missing or hand-edited sidecar must not
 /// block a reverse conversion, only degrade it to "unmappable fields are not
-/// restored."
+/// restored." Delegates to [`crate::preserve::read`], which owns the shared
+/// file — see module docs.
 #[must_use]
-pub fn read(path: &Path) -> Option<PreservedConfig> {
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.len() > MAX_SIDECAR_BYTES {
-        return None;
-    }
-    let text = fs::read_to_string(path).ok()?;
-    let parsed: PreservedConfig = serde_json::from_str(&text).ok()?;
-    (parsed.version == 1).then_some(parsed)
+pub fn read(path: &Path) -> Option<PreservedSidecar> {
+    crate::preserve::read(path)
 }
 
-/// Writes `fields` to `path` as version-1 [`PreservedConfig`] JSON.
+/// Writes `fields` to `path`'s `fields` section, preserving whatever
+/// `entries` [`crate::preserve`] already wrote there.
 ///
 /// # Errors
-/// Propagates [`write_atomic`]'s error if the write fails.
+/// Propagates [`crate::fs::atomic::write_atomic`]'s error if the write
+/// fails.
 pub fn write(
     fields: &std::collections::BTreeMap<String, YamlValue>,
     path: &Path,
 ) -> Result<(), crate::fs::atomic::AtomicWriteError> {
-    let config = PreservedConfig {
-        version: 1,
-        fields: fields
-            .iter()
-            .map(|(k, v)| (k.clone(), yaml_to_json(v)))
-            .collect(),
-    };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| {
-            crate::fs::atomic::AtomicWriteError::WriteTemp {
-                target: path.to_path_buf(),
-                temp_path: parent.to_path_buf(),
-                source,
-            }
-        })?;
-    }
-    let json = serde_json::to_string_pretty(&config)
-        .expect("PreservedConfig serialization cannot fail (no non-finite floats, no cycles)");
-    write_atomic(path, json.as_bytes())
+    let json_fields = fields
+        .iter()
+        .map(|(k, v)| (k.clone(), yaml_to_json(v)))
+        .collect();
+    crate::preserve::write_fields(&json_fields, path)
 }
 
 #[cfg(test)]
@@ -216,7 +184,7 @@ mod tests {
     fn oversized_sidecar_is_refused() {
         let tmp = tempdir("oversized");
         let path = tmp.join("preserved.json");
-        let padding = "x".repeat((MAX_SIDECAR_BYTES + 1) as usize);
+        let padding = "x".repeat((crate::preserve::MAX_SIDECAR_BYTES + 1) as usize);
         fs::write(&path, format!(r#"{{"pad":"{padding}"}}"#)).unwrap();
         assert!(read(&path).is_none());
         let _ = fs::remove_dir_all(&tmp);

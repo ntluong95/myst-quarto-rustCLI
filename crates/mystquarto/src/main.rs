@@ -28,7 +28,7 @@ fn main() {
 
     match execute(&convert_args, direction) {
         Ok(report) => {
-            let code = print_summary(&report, convert_args.dry_run);
+            let code = print_summary(&report, convert_args.dry_run, convert_args.strict);
             std::process::exit(code);
         }
         Err(err) => {

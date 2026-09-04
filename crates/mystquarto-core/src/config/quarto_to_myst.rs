@@ -14,15 +14,16 @@ use std::collections::BTreeMap;
 
 use super::{
     as_mapping, as_sequence, as_str, get, mapping_field, sequence_field, string_field, warn,
-    ConfigWarning,
+    Diagnostic, Severity,
 };
+use crate::diagnostics::codes::config as codes;
 use crate::yaml::emit::{emit, EmitField, YamlDoc};
 use crate::yaml::{parse_mapping, YamlReadError, YamlValue};
 
 pub struct ConversionResult {
     pub text: String,
     pub is_book: bool,
-    pub warnings: Vec<ConfigWarning>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Every root-level `_quarto.yml` key this function reads by name. Anything
@@ -115,6 +116,8 @@ pub fn convert(
         if !appendices.is_empty() {
             had_part_grouping |= flatten_chapters(&appendices, &mut flattened);
             warnings.push(warn(
+                Severity::LossyExpected,
+                codes::BOOK_APPENDICES_FLATTENED,
                 "_quarto.yml book.appendices has no myst.yml toc equivalent for the appendix/ \
                  main-matter distinction; appended to toc as regular entries (reference §8.1)"
                     .to_string(),
@@ -122,6 +125,8 @@ pub fn convert(
         }
         if had_part_grouping {
             warnings.push(warn(
+                Severity::LossyExpected,
+                codes::BOOK_PART_GROUPING_FLATTENED,
                 "_quarto.yml book chapters include a `part:` grouping, which myst.yml's toc has \
                  no equivalent for; flattened into a plain list (reference §8.1)"
                     .to_string(),
@@ -161,6 +166,8 @@ pub fn convert(
             project_fields.push(("subject".to_string(), YamlValue::String(first.to_string())));
             if cats.len() > 1 {
                 warnings.push(warn(
+                    Severity::Warning,
+                    codes::CATEGORIES_NARROWED_TO_SUBJECT,
                     "_quarto.yml categories has more than one entry; only the first was mapped \
                      back to myst.yml's single-valued subject field (reference §8.2)"
                         .to_string(),
@@ -224,10 +231,14 @@ pub fn convert(
     // channel for this direction to fall back on.
     for (key, _) in &root {
         if !HANDLED_ROOT_KEYS.contains(&key.as_str()) {
-            warnings.push(warn(format!(
-                "_quarto.yml top-level key `{key}` has no myst.yml equivalent; dropped \
-                 (reference §8.1-8.3)"
-            )));
+            warnings.push(warn(
+                Severity::Warning,
+                codes::UNRECOGNIZED_TOP_LEVEL_KEY_DROPPED,
+                format!(
+                    "_quarto.yml top-level key `{key}` has no myst.yml equivalent; dropped \
+                     (reference §8.1-8.3)"
+                ),
+            ));
         }
     }
 
@@ -304,7 +315,7 @@ fn flatten_chapters(chapters: &[YamlValue], out: &mut Vec<YamlValue>) -> bool {
 /// §8.3), so the two directions share one mapping table instead of two.
 pub(crate) fn format_to_exports(
     format: &[(String, YamlValue)],
-) -> (Option<YamlValue>, Vec<ConfigWarning>) {
+) -> (Option<YamlValue>, Vec<Diagnostic>) {
     let mut exports = Vec::new();
     let mut warnings = Vec::new();
     for (key, _) in format {
@@ -314,10 +325,14 @@ pub(crate) fn format_to_exports(
             "latex" => "tex",
             "jats" => "jats",
             other => {
-                warnings.push(warn(format!(
-                    "_quarto.yml format `{other}` has no exact myst.yml export equivalent; \
-                     passed through as `format: {other}` (reference §8.3)"
-                )));
+                warnings.push(warn(
+                    Severity::Warning,
+                    codes::FORMAT_PASSED_THROUGH,
+                    format!(
+                        "_quarto.yml format `{other}` has no exact myst.yml export equivalent; \
+                         passed through as `format: {other}` (reference §8.3)"
+                    ),
+                ));
                 other
             }
         };

@@ -140,20 +140,56 @@ impl NotebookCellIndex {
     }
 }
 
-/// Sidecar entries keyed by the id in a preservation marker comment.
+/// Sidecar entries keyed by the id in a preservation marker comment, each
+/// carrying the dialect its content was captured in — see
+/// [`crate::preserve::Dialect`]'s docs for why a reader must know this
+/// before ever attempting to reparse restored content.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PreservationStore {
-    entries: BTreeMap<String, Vec<String>>,
+    entries: BTreeMap<String, (crate::preserve::Dialect, Vec<String>)>,
 }
 
 impl PreservationStore {
+    /// Inserts an entry of unknown dialect — for callers (mainly tests)
+    /// that don't need the dialect-matching safety [`Self::insert_dialect`]
+    /// provides; a reader treats `Dialect::Unknown` as foreign to every
+    /// dialect, so this never risks a cross-dialect reparse.
     pub fn insert(&mut self, id: impl Into<String>, original: Vec<String>) {
-        self.entries.insert(id.into(), original);
+        self.insert_dialect(id, crate::preserve::Dialect::Unknown, original);
     }
 
+    pub fn insert_dialect(
+        &mut self,
+        id: impl Into<String>,
+        dialect: crate::preserve::Dialect,
+        original: Vec<String>,
+    ) {
+        self.entries.insert(id.into(), (dialect, original));
+    }
+
+    /// Returns `original` only when `dialect` matches the entry's recorded
+    /// dialect — the actual fix: a reader can now only ever reparse content
+    /// it can prove is native to itself. Returns `None`, not the wrong
+    /// dialect's content, on a mismatch; callers fall back to an opaque
+    /// [`crate::BlockKind::Preserved`] instead (see
+    /// `crate::reader::myst::MystReader::push_preserved_or_marker`).
+    #[must_use]
+    pub fn get_matching(
+        &self,
+        id: &str,
+        dialect: crate::preserve::Dialect,
+    ) -> Option<&Vec<String>> {
+        let (entry_dialect, original) = self.entries.get(id)?;
+        (*entry_dialect == dialect).then_some(original)
+    }
+
+    /// Returns the entry's content regardless of dialect — for the "does
+    /// *any* entry exist for this id" question (an opaque
+    /// `BlockKind::Preserved` restore doesn't care which dialect it's in;
+    /// it never gets reparsed).
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&Vec<String>> {
-        self.entries.get(id)
+        self.entries.get(id).map(|(_, original)| original)
     }
 }
 
@@ -212,9 +248,16 @@ pub(crate) fn preservation_marker_id(line: &str) -> Option<&str> {
     if !trimmed.starts_with("<!-- mystquarto ") || !trimmed.ends_with("-->") {
         return None;
     }
-    trimmed
-        .split(".mystquarto/preserved.json#")
-        .nth(1)?
+    // Resolves from the *last* occurrence of the needle, not the first —
+    // defense in depth alongside `crate::preserve::marker`'s own escaping
+    // of this exact string inside `kind`: `marker()` guarantees only one
+    // real occurrence today, but this reader has no way to verify that
+    // guarantee held (a hand-edited file, or a future `marker()` bug,
+    // could reintroduce it) — the *last* occurrence is the one nearest the
+    // line's own trailing `-->`, which is the real anchor, not whatever an
+    // earlier, forged occurrence claims.
+    let (_, after) = trimmed.rsplit_once(".mystquarto/preserved.json#")?;
+    after
         .split_whitespace()
         .next()
         .map(|s| s.trim_end_matches("-->").trim())

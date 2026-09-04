@@ -416,6 +416,22 @@ fn parse_heading(line: &str) -> Option<(u8, String)> {
 }
 
 impl MystReader {
+    /// C2 fix (RT-02-class): this reader may only ever reparse restored
+    /// content it can *prove* is native MyST — i.e. an entry explicitly
+    /// recorded with `Dialect::Myst` when it was first preserved (see
+    /// `crate::preserve::Dialect`'s docs). Content recorded as
+    /// `Dialect::Quarto` (or `Unknown`, e.g. a hand-edited sidecar) is
+    /// foreign to this reader and is *never* passed to `self.parse_blocks`
+    /// — reparsing foreign syntax through the wrong dialect's parser is
+    /// exactly how a backtick-fenced MyST directive silently became a
+    /// Quarto executable code cell (and, if its body itself contained a
+    /// fence, let trailing lines escape as literal, unescaped document
+    /// content) in the version of this function that only excluded a lone
+    /// `Unmappable` result — foreign content lands in many other block
+    /// kinds just as readily. Foreign or missing content both become an
+    /// opaque `Preserved` block instead, which every writer (including
+    /// this dialect's own — see `writer::myst::MystWriter::render_block`'s
+    /// `Preserved` arm) passes through verbatim rather than re-rendering.
     fn push_preserved_or_marker(
         &self,
         out: &mut Vec<Block>,
@@ -423,7 +439,9 @@ impl MystReader {
         line: u32,
         blank: u8,
     ) -> Result<(), ReaderError> {
-        if let Some(original) = self.context.preserved.get(id) {
+        use crate::preserve::Dialect;
+
+        if let Some(original) = self.context.preserved.get_matching(id, Dialect::Myst) {
             let refs: Vec<&str> = original.iter().map(String::as_str).collect();
             let parsed = self.parse_blocks(&refs, line)?;
             if parsed.len() == 1 {
@@ -438,6 +456,19 @@ impl MystReader {
                 BlockKind::Preserved {
                     original: original.clone(),
                     code: "preserved-sidecar",
+                },
+                line,
+                line,
+                blank,
+            ));
+        } else if let Some(original) = self.context.preserved.get(id) {
+            // A real entry exists, but it's recorded as foreign to this
+            // dialect (or of unknown dialect) — never reparsed, passed
+            // through opaquely.
+            out.push(block(
+                BlockKind::Preserved {
+                    original: original.clone(),
+                    code: "preserved-foreign-dialect",
                 },
                 line,
                 line,
@@ -610,7 +641,15 @@ mod tests {
     #[test]
     fn preserved_marker_reparses_original_block() {
         let mut preserved = PreservationStore::default();
-        preserved.insert("b7f3", vec!["% restored".to_string()]);
+        // `Dialect::Myst` — matches `MystReader`'s own dialect, so this
+        // entry is eligible for reparse (see the C2 fix in
+        // `push_preserved_or_marker`); `Dialect::Quarto`/`Unknown` would
+        // instead fall through to an opaque `Preserved` block.
+        preserved.insert_dialect(
+            "b7f3",
+            crate::preserve::Dialect::Myst,
+            vec!["% restored".to_string()],
+        );
         let reader = MystReader::new(ReaderContext {
             preserved,
             ..ReaderContext::new("article.md")

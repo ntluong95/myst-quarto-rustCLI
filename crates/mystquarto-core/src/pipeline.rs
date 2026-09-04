@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::diagnostics::{codes, Diagnostic, Severity};
 use crate::registry::sidecar::{self, LabelSidecar};
 use crate::writer::{
     known_reference_labels, resolve_embed_id, MystWriter, QuartoWriter, RestoreMap,
@@ -26,18 +27,8 @@ use crate::{
     NotebookCellIndex, QuartoReader, ReaderContext, ReaderError,
 };
 
-/// Direction-agnostic non-fatal notice from a batch conversion — mirrors
-/// [`crate::registry::RegistryWarning`]/[`crate::registry::sidecar::SidecarWarning`]'s
-/// shape for the same reason: Phase 7 does not exist yet to assign these
-/// real diagnostic codes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchWarning {
-    pub file: Option<PathBuf>,
-    pub message: String,
-}
-
-/// A file this batch could not read or parse. Distinct from
-/// [`BatchWarning`]: a read/parse failure means that file has no rendered
+/// A file this batch could not read or parse. Distinct from a
+/// [`Diagnostic`]: a read/parse failure means that file has no rendered
 /// output at all, which the caller (already tracking per-file results) must
 /// surface as a hard per-file failure, not a warning attached to output
 /// that does not exist.
@@ -49,7 +40,7 @@ pub struct BatchFileError {
 
 /// Builds a [`NotebookCellIndex`] over every notebook in `notebooks`
 /// (absolute paths). A notebook that fails to parse is recorded as a
-/// [`BatchWarning`] and simply contributes no entries — a malformed
+/// [`Diagnostic`] and simply contributes no entries — a malformed
 /// notebook should not abort conversion of every `.md`/`.qmd` file in the
 /// project, only degrade any embed that would have referenced it (which
 /// becomes `Unmappable`, per `crate::reader::myst::MystReader::figure`'s
@@ -71,7 +62,7 @@ pub struct BatchFileError {
 fn build_notebook_index(
     notebooks: &[PathBuf],
     input_root: &Path,
-) -> (NotebookCellIndex, Vec<BatchWarning>) {
+) -> (NotebookCellIndex, Vec<Diagnostic>) {
     let mut index = NotebookCellIndex::default();
     let mut warnings = Vec::new();
     for path in notebooks {
@@ -79,16 +70,24 @@ fn build_notebook_index(
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 if let Err(e) = index.add_notebook_json(rel, &text) {
-                    warnings.push(BatchWarning {
-                        file: Some(path.clone()),
-                        message: format!("could not index notebook cells: {e}"),
-                    });
+                    warnings.push(
+                        Diagnostic::new(
+                            Severity::Warning,
+                            codes::io::NOTEBOOK_INDEX_FAILED,
+                            format!("could not index notebook cells: {e}"),
+                        )
+                        .with_file(path.clone()),
+                    );
                 }
             }
-            Err(e) => warnings.push(BatchWarning {
-                file: Some(path.clone()),
-                message: format!("could not read notebook: {e}"),
-            }),
+            Err(e) => warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::io::NOTEBOOK_UNREADABLE,
+                    format!("could not read notebook: {e}"),
+                )
+                .with_file(path.clone()),
+            ),
         }
     }
     (index, warnings)
@@ -116,7 +115,14 @@ pub struct MystToQuartoBatch {
     /// needs this list but has no access to `documents` or the registry
     /// itself, both of which live only inside this function.
     pub used_citation_keys: std::collections::BTreeSet<String>,
-    pub warnings: Vec<BatchWarning>,
+    /// Every preserved/unmappable block's sidecar entry across `documents`
+    /// (reference RD-2/RT-02), for the caller to write to
+    /// `.mystquarto/preserved.json` via `crate::preserve::write` — merged
+    /// from every document's own [`crate::writer::QuartoWriter::write`]
+    /// output, keyed by content hash so identical preserved content from
+    /// two documents collapses to one entry rather than conflicting.
+    pub preserved_entries: BTreeMap<String, crate::preserve::PreservedEntry>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Converts every file in `files` (absolute `.md` paths) from MyST to
@@ -133,11 +139,12 @@ pub fn convert_myst_to_quarto_batch(
     input_root: &Path,
 ) -> MystToQuartoBatch {
     let (notebook_index, mut warnings) = build_notebook_index(notebooks, input_root);
+    let preservation_store = load_preservation_store(input_root);
 
     let mut documents: Vec<(PathBuf, Document)> = Vec::new();
     let mut errors = Vec::new();
     for path in files {
-        match read_myst(path, &notebook_index, input_root) {
+        match read_myst(path, &notebook_index, input_root, &preservation_store) {
             Ok(doc) => documents.push((path.clone(), doc)),
             Err(e) => errors.push(BatchFileError {
                 file: path.clone(),
@@ -147,20 +154,16 @@ pub fn convert_myst_to_quarto_batch(
     }
 
     let (registry, registry_warnings) = LabelRegistry::build(&documents);
-    warnings.extend(registry_warnings.into_iter().map(|w| BatchWarning {
-        file: Some(w.file),
-        message: w.message,
-    }));
+    warnings.extend(registry_warnings);
 
     let writer = QuartoWriter::new(&registry);
     let mut rendered = BTreeMap::new();
+    let mut preserved_entries = BTreeMap::new();
     for (path, doc) in &documents {
-        let (text, fm_warnings) = writer.write(doc);
+        let (text, doc_warnings, doc_preserved) = writer.write(doc);
         rendered.insert(path.clone(), text);
-        warnings.extend(fm_warnings.into_iter().map(|w| BatchWarning {
-            file: Some(path.clone()),
-            message: w.message,
-        }));
+        preserved_entries.extend(doc_preserved);
+        warnings.extend(doc_warnings.into_iter().map(|w| w.with_file(path.clone())));
     }
 
     let (notebook_renames, rename_warnings) = collect_notebook_renames(&registry, &documents);
@@ -194,14 +197,34 @@ pub fn convert_myst_to_quarto_batch(
         notebook_renames,
         sidecar,
         used_citation_keys,
+        preserved_entries,
         warnings,
     }
+}
+
+/// Loads `.mystquarto/preserved.json` under `input_root` (RT-11: the reader
+/// side of the marker round trip — see [`crate::preserve`] and
+/// `crate::reader::preservation_marker_id`), as untrusted input like every
+/// other sidecar in this crate: absent or malformed degrades to an empty
+/// store, which just means any marker in the input cannot be restored
+/// (`crate::diagnostics::codes::block::PRESERVATION_ENTRY_MISSING`), never a
+/// hard error.
+fn load_preservation_store(input_root: &Path) -> crate::reader::PreservationStore {
+    let mut store = crate::reader::PreservationStore::default();
+    let path = input_root.join(".mystquarto").join("preserved.json");
+    if let Some(sidecar) = crate::preserve::read(&path) {
+        for (id, entry) in sidecar.entries {
+            store.insert(id, entry.original);
+        }
+    }
+    store
 }
 
 fn read_myst(
     path: &Path,
     notebook_index: &NotebookCellIndex,
     input_root: &Path,
+    preserved: &crate::reader::PreservationStore,
 ) -> Result<Document, ReaderError> {
     let text = std::fs::read_to_string(path).map_err(|e| {
         ReaderError::Yaml(crate::yaml::YamlReadError::Scan(format!(
@@ -211,6 +234,7 @@ fn read_myst(
     })?;
     let context = ReaderContext {
         notebook_index: notebook_index.clone(),
+        preserved: preserved.clone(),
         ..ReaderContext::new(path).with_input_root(input_root)
     };
     MystReader::new(context).read_str(&text)
@@ -242,10 +266,7 @@ fn read_myst(
 fn collect_notebook_renames(
     registry: &LabelRegistry,
     documents: &[(PathBuf, Document)],
-) -> (
-    BTreeMap<PathBuf, BTreeMap<String, String>>,
-    Vec<BatchWarning>,
-) {
+) -> (BTreeMap<PathBuf, BTreeMap<String, String>>, Vec<Diagnostic>) {
     let mut out: BTreeMap<PathBuf, BTreeMap<String, String>> = BTreeMap::new();
     let mut warnings = Vec::new();
     for (source, doc) in documents {
@@ -265,7 +286,7 @@ fn walk_for_renames(
     source: &Path,
     blocks: &[Block],
     out: &mut BTreeMap<PathBuf, BTreeMap<String, String>>,
-    warnings: &mut Vec<BatchWarning>,
+    warnings: &mut Vec<Diagnostic>,
 ) {
     for block in blocks {
         match &block.kind {
@@ -318,7 +339,7 @@ fn walk_for_renames(
 /// the source documents, not something to silently paper over.
 fn record_notebook_rename(
     out: &mut BTreeMap<PathBuf, BTreeMap<String, String>>,
-    warnings: &mut Vec<BatchWarning>,
+    warnings: &mut Vec<Diagnostic>,
     source: &Path,
     notebook: &Path,
     cell_label: &crate::Label,
@@ -327,16 +348,20 @@ fn record_notebook_rename(
     let cell_map = out.entry(notebook.to_path_buf()).or_default();
     match cell_map.get(&cell_label.raw) {
         Some(existing) if existing != &new_id => {
-            warnings.push(BatchWarning {
-                file: Some(source.to_path_buf()),
-                message: format!(
-                    "{}: another document already claimed notebook cell `{}` as \
-                     `{existing}`; this document's embed of it as `{new_id}` will not \
-                     resolve — a single notebook cell can only have one label",
-                    notebook.display(),
-                    cell_label.raw,
-                ),
-            });
+            warnings.push(
+                Diagnostic::new(
+                    Severity::Warning,
+                    codes::label::NOTEBOOK_CELL_CLAIMED_BY_ANOTHER_DOCUMENT,
+                    format!(
+                        "{}: another document already claimed notebook cell `{}` as \
+                         `{existing}`; this document's embed of it as `{new_id}` will not \
+                         resolve — a single notebook cell can only have one label",
+                        notebook.display(),
+                        cell_label.raw,
+                    ),
+                )
+                .with_file(source.to_path_buf()),
+            );
         }
         Some(_) => {} // identical request from another document — fine
         None => {
@@ -403,7 +428,11 @@ fn collect_defined_labels(blocks: &[Block], out: &mut Vec<String>) {
 pub struct QuartoToMystBatch {
     pub rendered: BTreeMap<PathBuf, String>,
     pub errors: Vec<BatchFileError>,
-    pub warnings: Vec<BatchWarning>,
+    /// See [`MystToQuartoBatch::preserved_entries`] — same role, this
+    /// direction's own preserved/unmappable content (a Quarto construct
+    /// with no MyST equivalent).
+    pub preserved_entries: BTreeMap<String, crate::preserve::PreservedEntry>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Converts every file in `files` (absolute `.qmd` paths) from Quarto to
@@ -426,11 +455,12 @@ pub fn convert_quarto_to_myst_batch(
     sidecar_path: Option<&Path>,
 ) -> QuartoToMystBatch {
     let (notebook_index, mut warnings) = build_notebook_index(notebooks, input_root);
+    let preservation_store = load_preservation_store(input_root);
 
     let mut documents: Vec<(PathBuf, Document)> = Vec::new();
     let mut errors = Vec::new();
     for path in files {
-        match read_quarto(path, &notebook_index, input_root) {
+        match read_quarto(path, &notebook_index, input_root, &preservation_store) {
             Ok(doc) => documents.push((path.clone(), doc)),
             Err(e) => errors.push(BatchFileError {
                 file: path.clone(),
@@ -471,10 +501,7 @@ pub fn convert_quarto_to_myst_batch(
             // `"myst_to_quarto"`, not its own `"quarto_to_myst"`. These are
             // opposite by design: forward writes it, reverse reads it back.
             let (sidecar, sidecar_warnings) = sidecar::read_untrusted(p, "myst_to_quarto");
-            warnings.extend(sidecar_warnings.into_iter().map(|w| BatchWarning {
-                file: None,
-                message: w.message,
-            }));
+            warnings.extend(sidecar_warnings);
             let by_myst_key = sidecar
                 .map(|s| sidecar::restore_labels(&s, &content_hashes_by_myst_key))
                 .unwrap_or_default();
@@ -497,17 +524,17 @@ pub fn convert_quarto_to_myst_batch(
     let known_labels = labels_defined_in(&documents);
     let writer = MystWriter::new(&restore, known_labels);
     let mut rendered = BTreeMap::new();
+    let mut preserved_entries = BTreeMap::new();
     for (path, doc) in &documents {
-        let (text, fm_warnings) = writer.write(doc);
+        let (text, doc_warnings, doc_preserved) = writer.write(doc);
         rendered.insert(path.clone(), text);
-        warnings.extend(fm_warnings.into_iter().map(|w| BatchWarning {
-            file: Some(path.clone()),
-            message: w.message,
-        }));
+        preserved_entries.extend(doc_preserved);
+        warnings.extend(doc_warnings.into_iter().map(|w| w.with_file(path.clone())));
     }
 
     QuartoToMystBatch {
         rendered,
+        preserved_entries,
         errors,
         warnings,
     }
@@ -517,6 +544,7 @@ fn read_quarto(
     path: &Path,
     notebook_index: &NotebookCellIndex,
     input_root: &Path,
+    preserved: &crate::reader::PreservationStore,
 ) -> Result<Document, ReaderError> {
     let text = std::fs::read_to_string(path).map_err(|e| {
         ReaderError::Yaml(crate::yaml::YamlReadError::Scan(format!(
@@ -526,6 +554,7 @@ fn read_quarto(
     })?;
     let context = ReaderContext {
         notebook_index: notebook_index.clone(),
+        preserved: preserved.clone(),
         ..ReaderContext::new(path).with_input_root(input_root)
     };
     QuartoReader::new(context).read_str(&text)
@@ -675,6 +704,208 @@ mod tests {
         assert!(batch.rendered.contains_key(&tmp.join("ok.md")));
         assert_eq!(batch.errors.len(), 1);
         assert_eq!(batch.errors[0].file, missing);
+
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn preserved_content_round_trips_through_the_preservation_sidecar() {
+        // RT-11, end to end: an unmappable MyST construct converted forward
+        // leaves only a single-line marker in the `.qmd` (never the
+        // original source — RT-02) plus a sidecar entry; converting that
+        // `.qmd` back (from an input root where the sidecar is
+        // discoverable) restores the exact original construct.
+        let tmp = tempdir("preserve-round-trip");
+        write(
+            &tmp.join("a.md"),
+            ":::{glossary}\nterm\n: definition\n:::\n",
+        );
+        let files = vec![tmp.join("a.md")];
+        let forward = convert_myst_to_quarto_batch(&files, &[], &tmp);
+        assert!(forward.errors.is_empty(), "{:?}", forward.errors);
+        assert!(
+            !forward.preserved_entries.is_empty(),
+            "expected an unmappable construct to produce a sidecar entry"
+        );
+
+        let qmd_text = &forward.rendered[&tmp.join("a.md")];
+        assert!(
+            qmd_text.contains("<!-- mystquarto MQ0201:"),
+            "expected a preservation marker; got:\n{qmd_text}"
+        );
+        // The marker's `kind` label legitimately says "glossary" (extracted
+        // from the reader's reason text) — RT-02 is about the *original
+        // body content* (here, "term"/"definition") never appearing
+        // in-document, and the marker being a single line.
+        assert!(
+            !qmd_text.contains("term") && !qmd_text.contains("definition"),
+            "original source must never appear inline in the document (RT-02); got:\n{qmd_text}"
+        );
+        assert_eq!(
+            qmd_text
+                .lines()
+                .filter(|l| l.contains("mystquarto MQ0201"))
+                .count(),
+            1
+        );
+
+        let out_tmp = tempdir("preserve-round-trip-out");
+        write(&out_tmp.join("a.qmd"), qmd_text);
+        crate::preserve::write_entries(
+            &forward.preserved_entries,
+            &out_tmp.join(".mystquarto").join("preserved.json"),
+        )
+        .unwrap();
+
+        let reverse = convert_quarto_to_myst_batch(&[out_tmp.join("a.qmd")], &[], &out_tmp, None);
+        assert!(reverse.errors.is_empty(), "{:?}", reverse.errors);
+        let restored = &reverse.rendered[&out_tmp.join("a.qmd")];
+        assert!(
+            restored.contains("glossary") && restored.contains("definition"),
+            "original construct must be restored from the sidecar; got:\n{restored}"
+        );
+
+        cleanup(&tmp);
+        cleanup(&out_tmp);
+    }
+
+    #[test]
+    fn backtick_fenced_unmappable_construct_round_trips_byte_identically_through_a_quarto_hop() {
+        // C2 regression. Before the fix, a backtick-fenced MyST directive
+        // (as opposed to the `:::{...}` colon-fence form used elsewhere in
+        // this test module) restored from the sidecar during a reverse
+        // conversion reparsed "successfully" as a Quarto `code-cell` (the
+        // Quarto reader's generic ```` ```{anything} ```` acceptance,
+        // unrelated to the `Unmappable` exclusion the reader briefly used)
+        // — silently changing meaning, and, because the body itself
+        // contains a fence, letting the trailing lines terminate that code
+        // cell early and reach the document as literal, unescaped HTML.
+        // The fix (recording which dialect each entry was captured in, and
+        // never reparsing a foreign-dialect entry) must restore the
+        // original construct byte-for-byte instead.
+        let original =
+            "# H\n\n```{glossary}\ninner\n\n<div onclick=\"alert(1)\">LIVE HTML</div>\n```\n";
+        let tmp = tempdir("c2-hop1");
+        write(&tmp.join("a.md"), original);
+        let forward = convert_myst_to_quarto_batch(&[tmp.join("a.md")], &[], &tmp);
+        assert!(forward.errors.is_empty(), "{:?}", forward.errors);
+        let qmd_text = &forward.rendered[&tmp.join("a.md")];
+        assert!(
+            !qmd_text.contains("onclick") && !qmd_text.contains("LIVE HTML"),
+            "the dangerous body must never reach the document; got:\n{qmd_text}"
+        );
+
+        let hop2 = tempdir("c2-hop2");
+        write(&hop2.join("a.qmd"), qmd_text);
+        crate::preserve::write_entries(
+            &forward.preserved_entries,
+            &hop2.join(".mystquarto").join("preserved.json"),
+        )
+        .unwrap();
+        let reverse = convert_quarto_to_myst_batch(&[hop2.join("a.qmd")], &[], &hop2, None);
+        assert!(reverse.errors.is_empty(), "{:?}", reverse.errors);
+        let restored = &reverse.rendered[&hop2.join("a.qmd")];
+        assert_eq!(
+            restored, original,
+            "restored construct must be byte-identical to the original, not reinterpreted as a \
+             different construct (e.g. a Quarto code-cell)"
+        );
+
+        cleanup(&tmp);
+        cleanup(&hop2);
+    }
+
+    #[test]
+    fn a_kind_containing_the_sidecar_needle_cannot_hijack_which_entry_a_marker_resolves_to() {
+        // C3 regression: a source-derived `kind` (extracted from a
+        // directive/shortcode name) that happens to contain the literal
+        // string `.mystquarto/preserved.json#` used to let an attacker
+        // redirect a *different* marker's id resolution to an entry of
+        // their choosing (the reader resolved from the *first*
+        // occurrence of that string on the line). Two distinct constructs
+        // must restore as two distinct, uncorrupted originals.
+        let tmp = tempdir("c3-needle");
+        write(
+            &tmp.join("a.md"),
+            "```{glossary}\nBLOCK-B-CONTENT\n```\n\n```{.mystquarto/preserved.json#deadbeef}\nBLOCK-A-CONTENT\n```\n",
+        );
+        let forward = convert_myst_to_quarto_batch(&[tmp.join("a.md")], &[], &tmp);
+        assert!(forward.errors.is_empty(), "{:?}", forward.errors);
+        assert_eq!(
+            forward.preserved_entries.len(),
+            2,
+            "{:?}",
+            forward.preserved_entries
+        );
+        let qmd_text = &forward.rendered[&tmp.join("a.md")];
+        // Every marker line's id must resolve to a real, distinct entry —
+        // proven by round-tripping and getting both originals back intact.
+        let out_tmp = tempdir("c3-needle-out");
+        write(&out_tmp.join("a.qmd"), qmd_text);
+        crate::preserve::write_entries(
+            &forward.preserved_entries,
+            &out_tmp.join(".mystquarto").join("preserved.json"),
+        )
+        .unwrap();
+        let reverse = convert_quarto_to_myst_batch(&[out_tmp.join("a.qmd")], &[], &out_tmp, None);
+        assert!(reverse.errors.is_empty(), "{:?}", reverse.errors);
+        let restored = &reverse.rendered[&out_tmp.join("a.qmd")];
+        assert!(restored.contains("BLOCK-B-CONTENT"), "got:\n{restored}");
+        assert!(restored.contains("BLOCK-A-CONTENT"), "got:\n{restored}");
+        assert!(
+            restored.contains("```{glossary}"),
+            "the first construct's own directive syntax must survive; got:\n{restored}"
+        );
+
+        cleanup(&tmp);
+        cleanup(&out_tmp);
+    }
+
+    #[test]
+    fn unmappable_content_with_a_blank_line_and_a_script_tag_never_reaches_the_document() {
+        // RT-02's injection regression: the original mechanism wrapped
+        // unmappable source in an HTML comment, which Pandoc/Quarto ends at
+        // the first *blank line* (not at `-->`), so multi-paragraph
+        // unmappable content containing `<script>` after a blank line
+        // became live, rendered markup. The marker+sidecar mechanism this
+        // phase adds structurally cannot reproduce that: the document only
+        // ever holds a single-line, content-free marker — the original
+        // (however dangerous-looking) never appears in the document at all.
+        let tmp = tempdir("injection-regression");
+        write(
+            &tmp.join("a.md"),
+            ":::{glossary}\nterm\n\n<script>alert(1)</script>\n--!>\n:::\n",
+        );
+        let files = vec![tmp.join("a.md")];
+        let batch = convert_myst_to_quarto_batch(&files, &[], &tmp);
+        assert!(batch.errors.is_empty(), "{:?}", batch.errors);
+
+        let qmd_text = &batch.rendered[&tmp.join("a.md")];
+        assert!(
+            !qmd_text.contains("<script>"),
+            "the dangerous content must never reach the document; got:\n{qmd_text}"
+        );
+        assert!(
+            !qmd_text.contains("--!>"),
+            "the embedded comment-terminator lookalike must never reach the document; got:\n{qmd_text}"
+        );
+        // Exactly one marker line, no blank line inside it for a
+        // downstream HTML-comment-termination rule to exploit.
+        let marker_lines: Vec<&str> = qmd_text
+            .lines()
+            .filter(|l| l.contains("mystquarto MQ0201"))
+            .collect();
+        assert_eq!(marker_lines.len(), 1, "got:\n{qmd_text}");
+        assert!(marker_lines[0].starts_with("<!-- mystquarto") && marker_lines[0].ends_with("-->"));
+
+        // The dangerous content is exactly what got fenced off into the
+        // sidecar (never rendered — the sidecar is JSON, not markup).
+        let entry = batch
+            .preserved_entries
+            .values()
+            .next()
+            .expect("one preserved entry");
+        assert!(entry.original.iter().any(|l| l.contains("<script>")));
 
         cleanup(&tmp);
     }

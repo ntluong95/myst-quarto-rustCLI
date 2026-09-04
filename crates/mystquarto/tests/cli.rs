@@ -139,47 +139,211 @@ fn mystquarto_cmd() -> Command {
 }
 
 // =======================================================================
-// Ports tests/test_cli.py::TestWarningCollector (8 bucket-B tests).
-//
-// All ignored: they exercise Python's `WarningCollector` (src/mystquarto/
-// warnings.py), an in-memory warning/error accumulator with no Rust
-// equivalent yet. Diagnostics/warning collection is Phase 7's scope
-// (phase-07-diagnostics.md), not this phase's file-orchestration/CLI
-// scope — this phase's CLI has nothing to promote warnings to errors from,
-// since there is no warning collector to promote from yet.
+// Ports tests/test_cli.py::TestWarningCollector (8 bucket-B tests), against
+// this phase's real replacement: `mystquarto_core::diagnostics::Diagnostic`
+// plus `orchestrate::print_summary`'s human renderer and `--strict`
+// promotion — there is no separate `WarningCollector` type in the Rust
+// port (see `crate::orchestrate::RunReport::warnings`), so these test the
+// end-to-end CLI behavior the Python tests were checking instead of a
+// class-level API that has no Rust analogue.
 // =======================================================================
 mod warning_collector {
-    #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_warning_collector_basic() {}
+    use super::*;
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_warning_with_file_and_line() {}
+    fn test_warning_with_file_and_line_prints_in_the_diagnostic_line() {
+        // A book with a `part:`-grouped chapter set is exactly the
+        // MQ0403 lossy-narrowing path (config/quarto_to_myst.rs) — real,
+        // deterministic, and file-scoped.
+        let tmp = tempdir("warning-file-line");
+        fs::write(
+            tmp.join("_quarto.yml"),
+            "project:\n  type: book\nbook:\n  chapters:\n    - index.qmd\n    - part: \"P\"\n      chapters:\n        - a.qmd\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("index.qmd"), "# Index\n").unwrap();
+        fs::write(tmp.join("a.qmd"), "# A\n").unwrap();
+        let output_dir = tempdir("warning-file-line-out");
+
+        let assert = quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+        assert!(
+            stderr.contains("_quarto.yml") && stderr.contains("[MQ0403]"),
+            "expected a file-scoped MQ0403 diagnostic line, got:\n{stderr}"
+        );
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_error_with_file_and_line() {}
+    fn test_strict_mode_warnings_become_errors() {
+        // `_quarto.yml` `categories` with more than one entry (MQ0405,
+        // Severity::Warning — only the first maps back to myst.yml's
+        // single-valued `subject`): plain conversion succeeds, `--strict`
+        // on the identical input fails — proving `--strict` actually
+        // promotes a real Warning-class diagnostic to a non-zero exit,
+        // which the old bool-only flag never did.
+        let tmp = tempdir("strict-promotes");
+        fs::write(
+            tmp.join("_quarto.yml"),
+            "title: X\ncategories:\n  - A\n  - B\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("index.qmd"), "# Index\n").unwrap();
+
+        let out1 = tempdir("strict-promotes-out1");
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&out1)
+            .assert()
+            .success();
+
+        let out2 = tempdir("strict-promotes-out2");
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&out2)
+            .arg("--strict")
+            .assert()
+            .failure()
+            .code(1);
+
+        cleanup(&tmp);
+        cleanup(&out1);
+        cleanup(&out2);
+    }
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_strict_mode_warnings_become_errors() {}
+    fn test_strict_all_also_promotes_expected_lossy() {
+        // The `part:`-grouping case (MQ0403, Severity::LossyExpected):
+        // bare `--strict` does not fail on it (LossyExpected is opt-in
+        // only), but `--strict=all` does.
+        let tmp = tempdir("strict-all-promotes");
+        fs::write(
+            tmp.join("_quarto.yml"),
+            "project:\n  type: book\nbook:\n  chapters:\n    - index.qmd\n    - part: \"P\"\n      chapters:\n        - a.qmd\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("index.qmd"), "# Index\n").unwrap();
+        fs::write(tmp.join("a.qmd"), "# A\n").unwrap();
+
+        let out1 = tempdir("strict-all-promotes-out1");
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&out1)
+            .arg("--strict")
+            .assert()
+            .success();
+
+        let out2 = tempdir("strict-all-promotes-out2");
+        quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&out2)
+            .arg("--strict=all")
+            .assert()
+            .failure()
+            .code(1);
+
+        cleanup(&tmp);
+        cleanup(&out1);
+        cleanup(&out2);
+    }
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_has_errors() {}
+    fn test_has_errors_exit_code_reflects_a_real_file_failure_regardless_of_strict() {
+        // Severity::Error-class failures (an unreadable file) already
+        // always fail a run via `FileStatus::Failed` — `--strict` must not
+        // be required to observe that, and must not change it either.
+        let tmp = tempdir("has-errors");
+        fs::write(tmp.join("myst.yml"), "project:\n  title: T\n").unwrap();
+        fs::write(tmp.join("broken.md"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        let output_dir = tempdir("has-errors-out");
+
+        myst2quarto_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .failure()
+            .code(1);
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_report_format() {}
+    fn test_report_format_prints_explicit_zero_counts_on_a_clean_run() {
+        // "A visible `0 warnings` is the signal that silence was earned"
+        // (reference §11) — the summary line's counts must always print,
+        // including zeros, not just when something is actually wrong.
+        let tmp = tempdir("report-format-clean");
+        fs::write(tmp.join("doc.md"), "# Hello\n").unwrap();
+        let output_dir = tempdir("report-format-clean-out");
+
+        let assert = myst2quarto_cmd()
+            .arg(tmp.join("doc.md"))
+            .arg("-o")
+            .arg(&output_dir)
+            .assert()
+            .success();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+        assert!(
+            stderr.contains("0 error(s), 0 warning(s), 0 expected-lossy"),
+            "got:\n{stderr}"
+        );
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 
     #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_warn_no_file() {}
+    fn test_suppress_toml_baselines_a_code() {
+        // The same MQ0403 case as above, but with `.mystquarto/suppress.toml`
+        // (in the *input* tree) naming that code — it must vanish from both
+        // the printed diagnostics and the counted total, and `--strict`
+        // must no longer fail on it.
+        let tmp = tempdir("suppress-toml");
+        fs::write(
+            tmp.join("_quarto.yml"),
+            "project:\n  type: book\nbook:\n  chapters:\n    - index.qmd\n    - part: \"P\"\n      chapters:\n        - a.qmd\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("index.qmd"), "# Index\n").unwrap();
+        fs::write(tmp.join("a.qmd"), "# A\n").unwrap();
+        fs::create_dir_all(tmp.join(".mystquarto")).unwrap();
+        fs::write(
+            tmp.join(".mystquarto").join("suppress.toml"),
+            "codes = [\"MQ0403\"]\n",
+        )
+        .unwrap();
+        let output_dir = tempdir("suppress-toml-out");
 
-    #[test]
-    #[ignore = "needs Phase 7's diagnostics/WarningCollector system"]
-    fn test_error_no_file() {}
+        let assert = quarto2myst_cmd()
+            .arg(&tmp)
+            .arg("-o")
+            .arg(&output_dir)
+            .arg("--strict")
+            .assert()
+            .success();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+        assert!(!stderr.contains("MQ0403"), "got:\n{stderr}");
+        assert!(
+            stderr.contains("0 error(s), 0 warning(s), 0 expected-lossy"),
+            "got:\n{stderr}"
+        );
+
+        cleanup(&tmp);
+        cleanup(&output_dir);
+    }
 }
 
 // =======================================================================
@@ -944,11 +1108,13 @@ mod cli_options {
     fn test_strict_mode() {
         let tmp = tempdir("cli-options-strict");
         fs::write(tmp.join("doc.md"), "# Hello\n").unwrap();
-        let output_dir = tmp.join("output");
+        // A sibling directory, not nested inside `tmp` — output nested in
+        // the input tree triggers the (correct, unrelated) H1
+        // output-writes-into-input-tree warning, which `--strict` now
+        // legitimately promotes; that is not what this test is about.
+        let output_dir = tempdir("cli-options-strict-out");
 
-        // A conversion with nothing lossy in it succeeds under --strict —
-        // there is no diagnostics/warning-promotion system yet (Phase 7),
-        // so this only proves --strict does not itself break a clean run.
+        // A conversion with nothing lossy in it succeeds under --strict.
         myst2quarto_cmd()
             .arg(tmp.join("doc.md"))
             .arg("-o")
@@ -958,6 +1124,7 @@ mod cli_options {
             .success();
 
         cleanup(&tmp);
+        cleanup(&output_dir);
     }
 }
 

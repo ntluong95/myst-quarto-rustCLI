@@ -24,13 +24,127 @@
 pub mod myst;
 pub mod quarto;
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::diagnostics::{codes, Diagnostic, Severity};
+use crate::preserve::{self, PreservedEntry};
 use crate::reader::inline::{rewrite_line, InlineEvent};
-use crate::{Block, Label};
+use crate::{Block, Label, Span};
 
 pub use myst::MystWriter;
 pub use quarto::{resolve_embed_id, QuartoWriter};
+
+/// Renders a `Preserved`/`Unmappable` block as its single-line, content-free
+/// marker (reference §11, RD-2/RT-02) — shared by both writers, since the
+/// marker syntax (an HTML comment) is dialect-agnostic: it renders as
+/// nothing in both MyST and Quarto/Pandoc output, which is exactly why the
+/// same syntax works as the round-trip anchor `crate::reader::preservation_marker_id`
+/// recognizes regardless of which dialect is being read.
+///
+/// `original` empty means there is nothing to preserve (the "sidecar entry
+/// for a marker being read back was missing" degrade — see
+/// [`codes::block::PRESERVATION_ENTRY_MISSING`]): no sidecar entry is
+/// written, and the returned marker says so rather than pointing at a
+/// fabricated id that would perpetuate the same problem on a later round
+/// trip.
+///
+/// `sink` bundles the two per-document accumulators
+/// ([`QuartoWriter`]/[`MystWriter`]'s `preserved`/`diagnostics` fields) into
+/// one argument — purely to keep this function's arity down; the two are
+/// otherwise unrelated (one is sidecar data, one is user-facing output).
+pub(crate) struct PreserveSink<'a> {
+    pub preserved: &'a RefCell<BTreeMap<String, PreservedEntry>>,
+    pub diagnostics: &'a RefCell<Vec<Diagnostic>>,
+}
+
+/// Bundles `render_preserved`'s per-call disposition (as opposed to
+/// `PreserveSink`'s per-document accumulator state) — purely to keep that
+/// function's arity down.
+pub(crate) struct PreservedDisposition {
+    pub code: &'static str,
+    pub severity: Severity,
+    /// The dialect `original` is written in — always the *writer's own*
+    /// input dialect for a fresh `Unmappable` block (a `QuartoWriter` only
+    /// ever processes MyST-sourced documents, so its `Unmappable` content
+    /// is always `Dialect::Myst`; `MystWriter`'s production caller,
+    /// `crate::pipeline::convert_quarto_to_myst_batch`, is symmetric).
+    /// Recorded on the sidecar entry so a later reader can refuse to
+    /// reparse it through the wrong dialect's parser — see
+    /// `crate::preserve::Dialect`'s docs.
+    pub dialect: crate::preserve::Dialect,
+}
+
+pub(crate) fn render_preserved(
+    sink: &PreserveSink,
+    file: &Path,
+    span: Span,
+    kind: &str,
+    disposition: PreservedDisposition,
+    original: Vec<String>,
+) -> String {
+    let PreservedDisposition {
+        code,
+        severity,
+        dialect,
+    } = disposition;
+    if original.is_empty() {
+        sink.diagnostics.borrow_mut().push(
+            Diagnostic::new(
+                Severity::Warning,
+                codes::block::PRESERVATION_ENTRY_MISSING,
+                "a preservation marker's sidecar entry was not found (missing or stale \
+                 .mystquarto/preserved.json); its original content could not be restored",
+            )
+            .with_file(file.to_path_buf())
+            .with_span(span),
+        );
+        return "<!-- mystquarto: preservation entry missing, original content unavailable -->"
+            .to_string();
+    }
+
+    let id = preserve::entry_id(&original);
+    sink.preserved.borrow_mut().insert(
+        id.clone(),
+        PreservedEntry {
+            file: file.display().to_string(),
+            line: span.start_line,
+            code: code.to_string(),
+            kind: kind.to_string(),
+            dialect,
+            original,
+        },
+    );
+    sink.diagnostics.borrow_mut().push(
+        Diagnostic::new(
+            severity,
+            code,
+            format!("{kind} has no equivalent in the target dialect; preserved"),
+        )
+        .with_file(file.to_path_buf())
+        .with_span(span)
+        .with_preserved(id.clone()),
+    );
+    preserve::marker(code, kind, &id)
+}
+
+/// Extracts a short human-readable label for a preserved construct from a
+/// reader-produced message (`BlockKind::Unmappable::reason`, e.g.
+/// `"unrecognized MyST directive {glossary}"`): the text inside the first
+/// `{...}`, matching the phase spec's own marker example
+/// (`{glossary} preserved`). Falls back to `"construct"` when `reason` has
+/// no such substring (e.g. a Quarto shortcode's reason, which names the
+/// shortcode outside braces).
+#[must_use]
+pub(crate) fn preserved_kind(reason: &str) -> String {
+    if let Some(start) = reason.find('{') {
+        if let Some(end) = reason[start..].find('}') {
+            return reason[start + 1..start + end].to_string();
+        }
+    }
+    "construct".to_string()
+}
 
 /// Renders a block's `blank_lines_before` as that many blank lines, except
 /// before the very first block in a sequence (nothing to separate it from).

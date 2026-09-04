@@ -4,7 +4,8 @@
 //! invalid Quarto — the template name is inspected and mapped to a real
 //! format, with the (non-portable) template name preserved as a comment.
 
-use super::{as_mapping, as_str, get, warn, ConfigWarning};
+use super::{as_mapping, as_str, get, warn, Diagnostic, Severity};
+use crate::diagnostics::codes::config as codes;
 use crate::yaml::YamlValue;
 
 /// The Quarto `format:` field this phase would emit, plus any comment that
@@ -23,7 +24,7 @@ pub struct FormatField {
 /// entry being an unmappable `format: meca`) — callers must not emit
 /// `format: {}` in that case, only skip the field.
 #[must_use]
-pub fn exports_to_format(exports: &[YamlValue]) -> (Option<FormatField>, Vec<ConfigWarning>) {
+pub fn exports_to_format(exports: &[YamlValue]) -> (Option<FormatField>, Vec<Diagnostic>) {
     let mut entries: Vec<(String, YamlValue)> = Vec::new();
     let mut comment_lines: Vec<String> = Vec::new();
     let mut warnings = Vec::new();
@@ -38,14 +39,20 @@ pub fn exports_to_format(exports: &[YamlValue]) -> (Option<FormatField>, Vec<Con
                     entries.push((quarto_key.to_string(), YamlValue::Mapping(vec![])))
                 }
                 None if fmt == "meca" => warnings.push(warn(
+                    Severity::Warning,
+                    codes::EXPORT_FORMAT_DROPPED,
                     "myst.yml project.exports: format `meca` has no Quarto equivalent \
                      (reference §8.3); dropped"
                         .to_string(),
                 )),
-                None => warnings.push(warn(format!(
-                    "myst.yml project.exports: unrecognized format `{fmt}`; dropped (no known \
-                     Quarto equivalent)"
-                ))),
+                None => warnings.push(warn(
+                    Severity::Warning,
+                    codes::EXPORT_FORMAT_DROPPED,
+                    format!(
+                        "myst.yml project.exports: unrecognized format `{fmt}`; dropped (no \
+                         known Quarto equivalent)"
+                    ),
+                )),
             }
         } else if let Some(template) = get(m, "template").and_then(as_str) {
             let (quarto_fmt, guessed) = infer_format_from_template(template);
@@ -62,10 +69,14 @@ pub fn exports_to_format(exports: &[YamlValue]) -> (Option<FormatField>, Vec<Con
                 )
             });
             if guessed {
-                warnings.push(warn(format!(
-                    "myst.yml project.exports: template `{template}`'s suffix is not \
-                     recognized; guessed format `{quarto_fmt}`"
-                )));
+                warnings.push(warn(
+                    Severity::Warning,
+                    codes::EXPORT_FORMAT_GUESSED,
+                    format!(
+                        "myst.yml project.exports: template `{template}`'s suffix is not \
+                         recognized; guessed format `{quarto_fmt}`"
+                    ),
+                ));
             }
         }
     }
