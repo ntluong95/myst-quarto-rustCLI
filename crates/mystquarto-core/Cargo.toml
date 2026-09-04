@@ -1,9 +1,13 @@
 [package]
 name = "mystquarto-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
-publish = false
+description = "Typed IR, readers, writers, and diagnostics powering the mystquarto MyST <-> Quarto converter"
+license = "MIT-0"
+repository = "https://github.com/ntluong95/myst-quarto-rustCLI"
+keywords = ["myst", "quarto", "markdown", "converter"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

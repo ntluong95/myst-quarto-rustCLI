@@ -14,7 +14,11 @@ blocks: []
 
 ## Overview
 
-Plan status: `in-progress`. Completed phases: 8/9.
+Plan status: `in-progress`. Completed phases: 8/9. Phase 9 in progress —
+packaging config, docs, GitHub repo, and Python removal are done; the actual
+`cargo publish`/`npm publish`/release-tag push are deliberately left for the
+repo owner to run with their own credentials (see phase-09's Implementation
+Notes).
 
 Port `mystquarto` from Python to Rust, replacing the regex line-scanner with a
 typed document IR, and fixing the 16 verified defects catalogued in
@@ -85,7 +89,7 @@ carries the distribution and performance win.
 | 6 | [Config & frontmatter mapping](./phase-06-config-frontmatter.md) | Done | 3, 4 |
 | 7 | [Diagnostics & lossy preservation](./phase-07-diagnostics.md) | Done | 5, 6 |
 | 8 | [Test corpus & renderer-backed validation](./phase-08-test-corpus.md) | Done | 7 |
-| 9 | [Ship: packaging, CI, docs, Python removal](./phase-09-ship.md) | Pending | 8 |
+| 9 | [Ship: packaging, CI, docs, Python removal](./phase-09-ship.md) | In progress | 8 |
 
 **Sequencing is strictly serial.** The original plan claimed Phases 4/5 and 6
 could run in parallel; they cannot. Phase 6 needs the engine detection Phase 4
@@ -168,9 +172,16 @@ information. The IR makes construct type available at write time.
 - [x] Running any conversion twice produces byte-identical trees and no nesting
 - [x] `--dry-run` writes zero bytes for every flag combination, verified by a
       recursive tree hash
-- [ ] `cargo install mystquarto` and `npx mystquarto` both work from a clean machine
-- [ ] `src/mystquarto/` and `tests/*.py` removed **after** a tagged commit and a
-      final PyPI deprecation release
+- [ ] `cargo install mystquarto` and `npx mystquarto` both work from a clean
+      machine — packaging is prepared (see phase-09) but nothing has been
+      published yet; blocked on the repo owner running `cargo publish`/
+      `npm publish` themselves
+- [x] `src/mystquarto/` and `tests/*.py` removed **after** a tagged commit —
+      but **without** the final PyPI deprecation release the plan also
+      required: this repo has no relationship to the live PyPI `mystquarto`
+      package (different owner/account), so that step is not executable
+      here. Flagged in phase-09's Implementation Notes rather than silently
+      dropped.
 - [x] `docs/dialect-comparison.md` matches implemented behavior (audited Phase 8)
 
 ## Open Questions
@@ -178,12 +189,17 @@ information. The IR makes construct type available at write time.
 1. **`.ipynb` cell-level conversion.** RD-3 puts notebook *label rewriting* in
    scope. Full cell-level conversion of notebook content is still out of scope —
    notebooks are copied with labels patched. Confirm this is sufficient.
-2. **npm package name and scope.** `mystquarto` and `@mystquarto/*` are both
-   currently unclaimed on npm; the platform scopes must be reserved in Phase 9
-   step 1 or the `optionalDependencies` install path is open to takeover.
-3. **Upstream repository.** `pyproject.toml` points at
-   `github.com/MaxGhenis/mystquarto`, to which this working copy has no
-   connection. Phase 9 publishing assumes rights there.
+2. **npm package name and scope.** Confirmed still unclaimed as of
+   2026-09-04 (`mystquarto` and the `@mystquarto` scope both 404 on the npm
+   registry). **Not yet reserved** — reservation needs the account holder's
+   own `npm login`, deliberately left for them (see phase-09).
+3. **Upstream repository — resolved 2026-09-04.** This working copy has no
+   connection to `github.com/MaxGhenis/mystquarto` (a different account's
+   live PyPI package). The user designated `github.com/ntluong95/myst-quarto-rustCLI`
+   as the new upstream; that repo was created and `main` + `pre-rust-port`
+   pushed there. Consequence: the plan's PyPI-deprecation-before-Python-removal
+   precondition is not executable from this repo — see phase-09's
+   Implementation Notes for how that gap was handled.
 
 ## Red Team Review
 

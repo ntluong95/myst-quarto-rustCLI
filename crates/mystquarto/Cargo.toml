@@ -3,12 +3,14 @@
 # this package name, not a binary name — see this crate's module docs and
 # the phase spec's "Workspace" section.
 name = "mystquarto"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Bidirectional MyST <-> Quarto converter"
 license = "MIT-0"
-publish = false
+repository = "https://github.com/ntluong95/myst-quarto-rustCLI"
+keywords = ["myst", "quarto", "markdown", "converter"]
+categories = ["command-line-utilities", "text-processing"]
 
 [features]
 renderer-tests = []
@@ -26,7 +28,7 @@ name = "quarto2myst"
 path = "src/bin/quarto2myst.rs"
 
 [dependencies]
-mystquarto-core = { path = "../mystquarto-core" }
+mystquarto-core = { path = "../mystquarto-core", version = "0.2.0" }
 clap = { version = "4", features = ["derive"] }
 walkdir = "2.5"
 anyhow = "1"
