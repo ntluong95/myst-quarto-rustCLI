@@ -13,11 +13,3 @@ dist/
 .mystquarto/
 *-quarto/
 *-myst/
-
-# article-template is vendored (decision: plan.md Phase 1). It still carries
-# its own nested .git (a permission hook blocks Claude Code from deleting it
-# via Bash) so it cannot yet be tracked as plain vendored content without git
-# creating a broken gitlink entry. Ignored here until a human runs:
-#   rm -rf article-template/.git
-# then this line should be removed and article-template/ committed for real.
-article-template/
