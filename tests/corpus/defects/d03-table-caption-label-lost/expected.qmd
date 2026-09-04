@@ -2,5 +2,4 @@
 |------|-------|
 | A    | 12    |
 | B    | 9     |
-
 : Summary of results across all sites. {#tbl-results}

@@ -459,8 +459,12 @@ fn parse_table(lines: &[&str], start: usize) -> (BlockKind, usize) {
         rows.push(lines[i].to_string());
         i += 1;
     }
-    if i < lines.len() && lines[i].trim_start().starts_with(':') {
-        let cap = lines[i].trim_start().trim_start_matches(':').trim();
+    let mut probe = i;
+    while probe < lines.len() && lines[probe].trim().is_empty() {
+        probe += 1;
+    }
+    if probe < lines.len() && lines[probe].trim_start().starts_with(':') {
+        let cap = lines[probe].trim_start().trim_start_matches(':').trim();
         let (caption, label) = split_caption_label(cap);
         return (
             BlockKind::Table {
@@ -468,7 +472,7 @@ fn parse_table(lines: &[&str], start: usize) -> (BlockKind, usize) {
                 rows,
                 label: label.map(Label::new),
             },
-            i,
+            probe,
         );
     }
     (

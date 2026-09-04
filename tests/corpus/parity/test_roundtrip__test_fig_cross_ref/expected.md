@@ -1,1 +1,1 @@
-As shown in {numref}`fig-results`.
+As shown in @fig-results.

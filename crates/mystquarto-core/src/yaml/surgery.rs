@@ -327,6 +327,9 @@ mod tests {
     /// Strips the `---`-delimited frontmatter out of a full `.md` file,
     /// returning just its inner text — the shape [`apply_edits`] expects.
     fn extract_frontmatter(full_text: &str) -> &str {
+        let full_text = full_text
+            .strip_prefix("<!-- mystquarto-roundtrip: stable -->\n")
+            .unwrap_or(full_text);
         let after_open = full_text
             .strip_prefix("---\n")
             .expect("fixture starts with ---");

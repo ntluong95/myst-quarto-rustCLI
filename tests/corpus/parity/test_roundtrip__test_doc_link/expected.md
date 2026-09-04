@@ -1,1 +1,1 @@
-See {doc}`methods` for more.
+See [methods](methods.qmd) for more.

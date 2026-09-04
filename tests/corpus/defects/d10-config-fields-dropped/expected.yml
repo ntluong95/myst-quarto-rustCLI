@@ -1,13 +1,15 @@
+project:
+  type: manuscript
 title: Sample Article
 subtitle: A Study in Regression
-short-title: Sample  # short_title (non-standard Quarto field, kept as metadata)
+short-title: Sample
 description: The canonical project description.
 categories:
-- Statistics
+  - Statistics
 image: banner.png
-# id: proj-001 (no Quarto equivalent; preserved as comment)
-# open_access: true (no Quarto equivalent; preserved as comment)
-# venue: Journal of Examples (no Quarto equivalent; preserved as comment)
+# mystquarto: no Quarto equivalent for these myst.yml fields
 # abbreviations:
 #   CRISPR: Clustered Regularly Interspaced Short Palindromic Repeats
-# site.template: article-theme (no direct Quarto theme equivalent; preserved as comment)
+# id: proj-001
+# open_access: true
+# venue: Journal of Examples

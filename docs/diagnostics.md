@@ -67,7 +67,7 @@ the rest of `mappings.toml` is tracked, not done, in
 | Code | Severity | Cause | Remedy |
 |---|---|---|---|
 | MQ0301 | Warning | A citation key is used somewhere in the conversion set but defined in no reachable `.bib` file (often a DOI key MyST resolved live). | Add the missing entry to the project's `.bib` file. |
-| MQ0302 | Info | `myst.yml` had no `bibliography:` key but a `.bib` file exists in the conversion set; one was synthesized. | No action — a helpful autofix, not a loss. |
+| MQ0302 | Info | A bibliography setting or supplemental DOI bibliography was synthesized so Quarto can resolve citations locally. | No action — a helpful autofix, not a loss. |
 
 ## MQ04xx — config / frontmatter
 
@@ -92,3 +92,5 @@ the rest of `mappings.toml` is tracked, not done, in
 | MQ0601 | Warning | A notebook in the conversion set could not be read. | Check the file exists and is readable; any embed referencing its cells will not resolve until fixed. |
 | MQ0602 | Warning | A notebook was read but its cells could not be indexed (malformed JSON). | Fix the notebook's JSON structure. |
 | MQ0603 | Warning | A notebook's output-tree copy could not be read back to relabel it, or relabelling itself failed. | Check the asset copy step completed and the notebook is valid JSON. |
+| MQ0604 | Warning | An asset path was a symlink and was skipped without dereferencing its target. | Replace the symlink with a regular file inside the project if the asset should be copied. |
+| MQ0605 | Warning | A path-safety check refused an include or embed target (escapes project root, include cycle, depth exceeded, or absolute path). | Ensure all include/embed targets reside within the project root and do not form circular references. |

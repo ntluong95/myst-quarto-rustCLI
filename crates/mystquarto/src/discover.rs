@@ -43,6 +43,7 @@ pub const DISCOVERY_SKIP_DIRS: &[&str] = &[
     ".mypy_cache",
     ".pytest_cache",
     "_site",
+    "_manuscript",
     ".quarto",
 ];
 

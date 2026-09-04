@@ -1266,9 +1266,188 @@ fn discovery_and_asset_copy_exclude_an_output_dir_nested_inside_the_input() {
     cleanup(&tmp);
 }
 
+#[cfg(unix)]
+#[test]
+fn symlink_assets_are_skipped_end_to_end() {
+    let tmp = tempdir("e2e-symlink-skip");
+    myst_project(&tmp);
+    let secret = tempdir("e2e-symlink-secret");
+    fs::write(secret.join("secret.txt"), "do not copy\n").unwrap();
+    std::os::unix::fs::symlink(secret.join("secret.txt"), tmp.join("linked-secret.txt")).unwrap();
+    let output_dir = tempdir("e2e-symlink-skip-out");
+
+    let assert = myst2quarto_cmd()
+        .arg(&tmp)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+
+    assert!(
+        stderr.contains("linked-secret.txt") && stderr.contains("MQ0604"),
+        "skipped symlink should be reported as a diagnostic, got:\n{stderr}"
+    );
+    assert!(
+        !output_dir.join("linked-secret.txt").exists(),
+        "symlink target must not be copied into the output tree"
+    );
+
+    cleanup(&tmp);
+    cleanup(&secret);
+    cleanup(&output_dir);
+}
+
+#[test]
+fn include_traversal_is_preserved_with_a_strict_all_diagnostic() {
+    let tmp = tempdir("e2e-include-traversal");
+    let input = tmp.join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(tmp.join("secret.md"), "outside\n").unwrap();
+    fs::write(
+        input.join("myst.yml"),
+        "project:\n  title: Traversal\n  toc:\n    - file: index\n",
+    )
+    .unwrap();
+    fs::write(
+        input.join("index.md"),
+        "# Index\n\n```{include} ../secret.md\n```\n",
+    )
+    .unwrap();
+    let output_dir = tempdir("e2e-include-traversal-out");
+
+    let assert = myst2quarto_cmd()
+        .arg(&input)
+        .arg("-o")
+        .arg(&output_dir)
+        .arg("--strict")
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("escapes") || stderr.contains("MQ0605"),
+        "include traversal should produce a strict Warning diagnostic, got:\n{stderr}"
+    );
+    assert!(
+        !fs::read_to_string(output_dir.join("index.qmd"))
+            .unwrap_or_default()
+            .contains("outside"),
+        "escaped include target content must never be read into output"
+    );
+
+    cleanup(&tmp);
+    cleanup(&output_dir);
+}
+
+#[test]
+fn d12_fixture_strict_now_fails_on_real_warnings() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/corpus/defects/d12-silent-warnings/input_dir")
+        .canonicalize()
+        .unwrap();
+    let output_dir = tempdir("e2e-d12-out");
+
+    let assert = myst2quarto_cmd()
+        .arg(fixture)
+        .arg("-o")
+        .arg(&output_dir)
+        .arg("--strict=all")
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("[MQ0401]") || stderr.contains("[MQ0402]"),
+        "D12 should now be visible to --strict=all, got:\n{stderr}"
+    );
+
+    cleanup(&output_dir);
+}
+
+#[test]
+fn d16_fixture_does_not_recurse_into_nested_output() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/corpus/defects/d16-output-recursion/input_dir")
+        .canonicalize()
+        .unwrap();
+    let tmp = tempdir("e2e-d16-fixture");
+    copy_dir(&source, &tmp);
+    let output_dir = tmp.join("docs-quarto");
+
+    myst2quarto_cmd()
+        .arg(&tmp)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+    myst2quarto_cmd()
+        .arg(&tmp)
+        .arg("-o")
+        .arg(&output_dir)
+        .arg("--force")
+        .assert()
+        .success();
+
+    assert!(
+        !output_dir.join("docs-quarto").exists(),
+        "D16 fixture must not create recursive output nesting"
+    );
+
+    cleanup(&tmp);
+}
+
+#[test]
+fn foreign_dialect_preservation_sidecar_is_not_reparsed_by_the_cli() {
+    let tmp = tempdir("e2e-foreign-sidecar");
+    fs::create_dir_all(tmp.join(".mystquarto")).unwrap();
+    fs::write(
+        tmp.join("article.qmd"),
+        "<!-- mystquarto MQ0201: preserved — see .mystquarto/preserved.json#evil -->\n",
+    )
+    .unwrap();
+    fs::write(
+        tmp.join(".mystquarto/preserved.json"),
+        "{\n  \"version\": 1,\n  \"entries\": {\n    \"evil\": {\n      \"file\": \"article.md\",\n      \"line\": 1,\n      \"code\": \"MQ0201\",\n      \"kind\": \"hostile\",\n      \"dialect\": \"Myst\",\n      \"original\": [\"```{glossary}\", \"term\", \": definition\", \"```\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
+    let output_dir = tempdir("e2e-foreign-sidecar-out");
+
+    quarto2myst_cmd()
+        .arg(&tmp)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+    let output = fs::read_to_string(output_dir.join("article.md")).unwrap();
+    assert!(
+        output.contains("```{glossary}") && output.contains(": definition"),
+        "foreign preserved content should be passed through opaquely, got:\n{output}"
+    );
+
+    cleanup(&tmp);
+    cleanup(&output_dir);
+}
+
 #[test]
 fn help_flag_exits_zero_for_all_three_binaries() {
     myst2quarto_cmd().arg("--help").assert().success();
     quarto2myst_cmd().arg("--help").assert().success();
     mystquarto_cmd().arg("--help").assert().success();
+}
+
+fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to);
+        } else {
+            fs::copy(&from, &to).unwrap();
+        }
+    }
 }

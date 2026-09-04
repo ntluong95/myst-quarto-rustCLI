@@ -1,3 +1,4 @@
+<!-- mystquarto-roundtrip: stable -->
 :::{figure} images/samples.png
 :label: fig:samples
 :width: 80%

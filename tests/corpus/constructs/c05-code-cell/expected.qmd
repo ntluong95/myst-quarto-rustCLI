@@ -1,0 +1,4 @@
+```{python}
+#| echo: false
+print(1)
+```

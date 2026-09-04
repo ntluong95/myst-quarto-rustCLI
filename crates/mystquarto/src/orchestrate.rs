@@ -66,6 +66,7 @@ use crate::discover::{self, Direction};
 const SIDECAR_DIR: &str = ".mystquarto";
 const LABELS_FILE: &str = "labels.json";
 const PRESERVED_CONFIG_FILE: &str = "preserved.json";
+const DOI_REFERENCES_FILE: &str = "doi-references.bib";
 /// A user-authored allowlist of diagnostic codes to drop from the report
 /// entirely (reference §11: "a `.mystquarto/suppress.toml` can baseline
 /// specific codes") — read from the *input* tree, since it documents the
@@ -412,15 +413,24 @@ fn execute_directory(
         if !args.in_place && !args.dry_run {
             let content_ext = [direction.source_extension()];
             let config_names = [source_config_name];
-            assets_report = Some(
-                assets::copy_assets(
-                    canonical_input,
-                    effective_output_root,
-                    &content_ext,
-                    &config_names,
-                )
-                .context("asset copy failed")?,
-            );
+            let report = assets::copy_assets(
+                canonical_input,
+                effective_output_root,
+                &content_ext,
+                &config_names,
+            )
+            .context("asset copy failed")?;
+            for path in &report.skipped_symlinks {
+                warnings.push(
+                    Diagnostic::new(
+                        Severity::Warning,
+                        codes::io::SYMLINK_ASSET_SKIPPED,
+                        "asset symlink skipped without dereferencing its target".to_string(),
+                    )
+                    .with_file(path.clone()),
+                );
+            }
+            assets_report = Some(report);
         }
 
         if !args.dry_run {
@@ -677,7 +687,7 @@ fn convert_config_file(
     match direction {
         Direction::MystToQuarto => {
             let bib_path = find_bib_file(canonical_input);
-            let result =
+            let mut result =
                 mystquarto_core::config::myst_to_quarto::convert(&text, bib_path.as_deref())
                     .map_err(|e| anyhow::anyhow!("{}: {e}", config_path.display()))?;
 
@@ -694,23 +704,49 @@ fn convert_config_file(
             mystquarto_core::config::sidecar::write(&result.preserved_fields, &sidecar_path)
                 .with_context(|| format!("could not write {}", sidecar_path.display()))?;
 
-            if let (
-                Some(bib_rel),
-                Some(ContentBatch::MystToQuarto {
-                    used_citation_keys, ..
-                }),
-            ) = (&bib_path, batch)
+            if let Some(ContentBatch::MystToQuarto {
+                used_citation_keys, ..
+            }) = batch
             {
-                if let Ok(bib_text) = fs::read_to_string(canonical_input.join(bib_rel)) {
-                    let defined =
-                        mystquarto_core::config::bibliography::bib_defined_keys(&bib_text);
-                    warnings.extend(with_file(
-                        mystquarto_core::config::bibliography::missing_citation_warnings(
-                            used_citation_keys,
-                            &defined,
+                let defined = if let Some(bib_rel) = &bib_path {
+                    if let Ok(bib_text) = fs::read_to_string(canonical_input.join(bib_rel)) {
+                        mystquarto_core::config::bibliography::bib_defined_keys(&bib_text)
+                    } else {
+                        std::collections::BTreeSet::new()
+                    }
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+
+                let missing: std::collections::BTreeSet<String> =
+                    used_citation_keys.difference(&defined).cloned().collect();
+                let generated_doi_refs: std::collections::BTreeSet<String> =
+                    missing.into_iter().filter(|key| is_doi_key(key)).collect();
+
+                if !generated_doi_refs.is_empty() {
+                    let rel = format!("{SIDECAR_DIR}/{DOI_REFERENCES_FILE}");
+                    let path = effective_output_root.join(&rel);
+                    write_doi_bibliography_supplement(&generated_doi_refs, &path)
+                        .with_context(|| format!("could not write {}", path.display()))?;
+                    result.text = add_bibliography_path(&result.text, &rel);
+                    warnings.push(Diagnostic::new(
+                        Severity::Info,
+                        codes::bibliography::BIBLIOGRAPHY_SYNTHESIZED,
+                        format!(
+                            "generated {rel} with {} DOI citation fallback entrie(s) so \
+                             Quarto can resolve citations without MyST's live DOI lookup",
+                            generated_doi_refs.len()
                         ),
                     ));
                 }
+
+                let defined_or_generated = defined.union(&generated_doi_refs).cloned().collect();
+                warnings.extend(with_file(
+                    mystquarto_core::config::bibliography::missing_citation_warnings(
+                        used_citation_keys,
+                        &defined_or_generated,
+                    ),
+                ));
             }
 
             Ok((result.text, warnings))
@@ -731,6 +767,87 @@ fn convert_config_file(
             Ok((result.text, with_file(result.warnings)))
         }
     }
+}
+
+fn is_doi_key(key: &str) -> bool {
+    key.starts_with("10.")
+        && key.contains('/')
+        && !key
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '{' | '}' | ',' | '"' | '%' | '\\' | '#'))
+}
+
+fn write_doi_bibliography_supplement(
+    keys: &std::collections::BTreeSet<String>,
+    path: &Path,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+
+    let mut text = String::new();
+    for key in keys {
+        text.push_str(&format!(
+            "@misc{{{key},\n  doi = {{{key}}},\n  url = {{https://doi.org/{key}}},\n  title = {{DOI reference {key}}},\n}}\n\n"
+        ));
+    }
+    write_atomic(path, text.as_bytes())?;
+    Ok(())
+}
+
+fn add_bibliography_path(text: &str, extra_path: &str) -> String {
+    let mut out = Vec::new();
+    let mut inserted = false;
+    let mut in_bib_seq = false;
+    for line in text.lines() {
+        if let Some(existing) = line.strip_prefix("bibliography: ") {
+            let trimmed = existing.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                let inner = &trimmed[1..trimmed.len() - 1];
+                let mut items: Vec<&str> = inner
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                items.push(extra_path);
+                out.push(format!("bibliography: [{}]", items.join(", ")));
+            } else {
+                out.push("bibliography:".to_string());
+                out.push(format!("  - {trimmed}"));
+                out.push(format!("  - {extra_path}"));
+            }
+            inserted = true;
+        } else if line.trim() == "bibliography:" {
+            out.push(line.to_string());
+            in_bib_seq = true;
+        } else if in_bib_seq {
+            if line.starts_with("  - ") || line.starts_with("    - ") {
+                out.push(line.to_string());
+            } else {
+                out.push(format!("  - {extra_path}"));
+                out.push(line.to_string());
+                inserted = true;
+                in_bib_seq = false;
+            }
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if in_bib_seq && !inserted {
+        out.push(format!("  - {extra_path}"));
+        inserted = true;
+    }
+    if !inserted {
+        out.push("bibliography:".to_string());
+        out.push(format!("  - {extra_path}"));
+    }
+
+    let mut rendered = out.join("\n");
+    if text.ends_with('\n') || !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
 }
 
 /// Finds a `.bib` file directly inside `dir` (the conventional location for

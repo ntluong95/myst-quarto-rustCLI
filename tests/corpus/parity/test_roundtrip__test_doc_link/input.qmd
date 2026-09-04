@@ -1,1 +1,2 @@
+<!-- mystquarto-roundtrip: normalized -->
 See [methods](methods.qmd) for more.

@@ -10,6 +10,9 @@ description = "Bidirectional MyST <-> Quarto converter"
 license = "MIT-0"
 publish = false
 
+[features]
+renderer-tests = []
+
 [[bin]]
 name = "mystquarto"
 path = "src/main.rs"

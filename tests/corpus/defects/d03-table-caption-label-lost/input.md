@@ -1,3 +1,4 @@
+<!-- mystquarto-roundtrip: stable -->
 :::{table}
 :label: tab:results
 

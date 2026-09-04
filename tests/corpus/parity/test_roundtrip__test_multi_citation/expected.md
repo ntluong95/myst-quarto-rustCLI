@@ -1,1 +1,1 @@
-See {cite}`smith2020,jones2021,doe2022`.
+See [@smith2020; @jones2021; @doe2022].

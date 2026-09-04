@@ -238,7 +238,7 @@ Modern MyST and Quarto both use Pandoc-style citation syntax, so this area is
 | Multiple | `[@a; @b]` | `[@a; @b]` | ✅ identical |
 | With locator | `[@a, p. 33]` | `[@a, p. 33]` | ✅ identical |
 | Suppress author | `[-@a]` | `[-@a]` | ✅ identical |
-| DOI as key | `[@10.1038/nmeth.1974]` | `[@10.1038/nmeth.1974]` | ⚠️ MyST resolves DOIs live; Quarto needs the entry in `.bib` |
+| DOI as key | `[@10.1038/nmeth.1974]` | `[@10.1038/nmeth.1974]` | ⚠️ MyST resolves DOIs live; converter writes a local `.mystquarto/doi-references.bib` supplement when the key is absent from `.bib` |
 | Legacy role | `` {cite}`key` `` | ➖ | read-only → emit `[@key]` |
 | Legacy narrative | `` {cite:t}`key` `` | ➖ | read-only → emit `@key` |
 | Legacy parenthetical | `` {cite:p}`key` `` | ➖ | read-only → emit `[@key]` |

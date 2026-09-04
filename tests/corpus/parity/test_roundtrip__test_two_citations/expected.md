@@ -1,1 +1,1 @@
-See {cite}`a,b`.
+See [@a; @b].

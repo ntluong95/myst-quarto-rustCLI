@@ -205,23 +205,35 @@ impl<'a> QuartoWriter<'a> {
             }
             BlockKind::Preserved { original, .. } => original.clone(),
             // `QuartoWriter`'s sole caller (`convert_myst_to_quarto_batch`)
-            // only ever processes MyST-sourced documents, so a fresh
-            // `Unmappable` block's `original` is always MyST text.
-            BlockKind::Unmappable { original, reason } => vec![crate::writer::render_preserved(
-                &crate::writer::PreserveSink {
-                    preserved: &self.preserved,
-                    diagnostics: &self.diagnostics,
-                },
-                source,
-                block.span,
-                &crate::writer::preserved_kind(reason),
-                crate::writer::PreservedDisposition {
-                    code: crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED,
-                    severity: crate::diagnostics::Severity::LossyExpected,
-                    dialect: crate::preserve::Dialect::Myst,
-                },
-                original.clone(),
-            )],
+            BlockKind::Unmappable { original, reason } => {
+                let is_path_safety = reason.contains("escapes")
+                    || reason.contains("cycle")
+                    || reason.contains("depth")
+                    || reason.contains("absolute path");
+                vec![crate::writer::render_preserved(
+                    &crate::writer::PreserveSink {
+                        preserved: &self.preserved,
+                        diagnostics: &self.diagnostics,
+                    },
+                    source,
+                    block.span,
+                    &crate::writer::preserved_kind(reason),
+                    crate::writer::PreservedDisposition {
+                        code: if is_path_safety {
+                            crate::diagnostics::codes::io::PATH_SAFETY_REFUSED
+                        } else {
+                            crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED
+                        },
+                        severity: if is_path_safety {
+                            crate::diagnostics::Severity::Warning
+                        } else {
+                            crate::diagnostics::Severity::LossyExpected
+                        },
+                        dialect: crate::preserve::Dialect::Myst,
+                    },
+                    original.clone(),
+                )]
+            }
         }
     }
 
@@ -665,9 +677,12 @@ fn render_role_to_quarto(
     source: &Path,
 ) -> String {
     match role {
-        "cite" | "cite:p" => format!("[@{target}]"),
+        "cite" | "cite:p" => render_citation_group(target),
         "cite:t" => format!("@{target}"),
-        "numref" | "ref" => format!("@{}", registry.resolve_reference(source, target)),
+        "numref" | "ref" => format!(
+            "@{}",
+            registry.resolve_reference(source, reference_target(target))
+        ),
         "eq" => {
             let id = if target.starts_with("eq-") || target.starts_with("eq:") {
                 registry.resolve_reference(source, target)
@@ -690,6 +705,34 @@ fn render_role_to_quarto(
         "abbr" => render_abbr(target),
         _ => format!("{{{role}}}`{target}`"), // unrecognized role: preserve verbatim
     }
+}
+
+fn render_citation_group(target: &str) -> String {
+    let keys: Vec<&str> = target
+        .split(',')
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .collect();
+    if keys.len() <= 1 {
+        format!("[@{}]", target.trim())
+    } else {
+        format!(
+            "[{}]",
+            keys.into_iter()
+                .map(|key| format!("@{key}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    }
+}
+
+fn reference_target(target: &str) -> &str {
+    if let Some(open) = target.rfind('<') {
+        if let Some(close) = target[open + 1..].find('>') {
+            return &target[open + 1..open + 1 + close];
+        }
+    }
+    target
 }
 
 fn render_abbr(target: &str) -> String {

@@ -62,6 +62,7 @@ pub const ASSET_SKIP_DIRS: &[&str] = &[
     ".mypy_cache",
     ".pytest_cache",
     "_site",
+    "_manuscript",
     ".quarto",
     // mystquarto's own sidecar directory (labels.json, preserved.json):
     // never a generic asset. Walking into it here would let a stale copy in

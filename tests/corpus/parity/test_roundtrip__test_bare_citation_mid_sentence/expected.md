@@ -1,1 +1,1 @@
-As {cite:t}`smith2020` noted.
+As @smith2020 noted.

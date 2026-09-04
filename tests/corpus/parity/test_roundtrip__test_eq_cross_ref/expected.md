@@ -1,1 +1,1 @@
-From equation {eq}`eq-energy`.
+From equation @eq-energy.

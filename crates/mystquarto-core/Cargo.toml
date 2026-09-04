@@ -12,3 +12,6 @@ toml = "0.8.23"
 saphyr = "0.0.12"
 saphyr-parser = "0.0.12"
 thiserror = "2"
+
+[dev-dependencies]
+similar = "2"

@@ -170,6 +170,12 @@ pub fn convert(
     if let Some(v) = string_field(project, "bibliography") {
         fields.push(EmitField::new("bibliography", YamlValue::String(v)));
         bibliography_set = true;
+    } else if let Some(seq) = get(project, "bibliography").and_then(as_sequence) {
+        fields.push(EmitField::new(
+            "bibliography",
+            YamlValue::Sequence(seq.to_vec()),
+        ));
+        bibliography_set = true;
     }
     if !bibliography_set {
         if let Some(bib_path) = bib_path_for_synthesis {

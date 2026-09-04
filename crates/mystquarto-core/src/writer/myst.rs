@@ -181,7 +181,10 @@ impl<'a> MystWriter<'a> {
             BlockKind::TabSet { items } => self.tab_set(items, source),
             BlockKind::Margin { body } => self.directive_wrap("margin", body, source),
             BlockKind::Include { target, .. } => {
-                vec![format!("```{{include}} {}", target.display())]
+                vec![
+                    format!("```{{include}} {}", myst_include_target(target).display()),
+                    "```".to_string(),
+                ]
             }
             BlockKind::Embed { target, label } => self.embed(target, label.as_ref(), source),
             BlockKind::Blockquote { body, attribution } => {
@@ -243,24 +246,35 @@ impl<'a> MystWriter<'a> {
             // reparsed, so the worst outcome is literal foreign-dialect
             // text appearing in the output, not silent corruption.)
             BlockKind::Preserved { original, .. } => original.clone(),
-            // `MystWriter`'s production caller (`convert_quarto_to_myst_batch`)
-            // only ever processes Quarto-sourced documents, so a fresh
-            // `Unmappable` block's `original` is always Quarto text.
-            BlockKind::Unmappable { original, reason } => vec![crate::writer::render_preserved(
-                &crate::writer::PreserveSink {
-                    preserved: &self.preserved,
-                    diagnostics: &self.diagnostics,
-                },
-                source,
-                block.span,
-                &crate::writer::preserved_kind(reason),
-                crate::writer::PreservedDisposition {
-                    code: crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED,
-                    severity: crate::diagnostics::Severity::LossyExpected,
-                    dialect: crate::preserve::Dialect::Quarto,
-                },
-                original.clone(),
-            )],
+            BlockKind::Unmappable { original, reason } => {
+                let is_path_safety = reason.contains("escapes")
+                    || reason.contains("cycle")
+                    || reason.contains("depth")
+                    || reason.contains("absolute path");
+                vec![crate::writer::render_preserved(
+                    &crate::writer::PreserveSink {
+                        preserved: &self.preserved,
+                        diagnostics: &self.diagnostics,
+                    },
+                    source,
+                    block.span,
+                    &crate::writer::preserved_kind(reason),
+                    crate::writer::PreservedDisposition {
+                        code: if is_path_safety {
+                            crate::diagnostics::codes::io::PATH_SAFETY_REFUSED
+                        } else {
+                            crate::diagnostics::codes::block::UNMAPPABLE_PRESERVED
+                        },
+                        severity: if is_path_safety {
+                            crate::diagnostics::Severity::Warning
+                        } else {
+                            crate::diagnostics::Severity::LossyExpected
+                        },
+                        dialect: crate::preserve::Dialect::Quarto,
+                    },
+                    original.clone(),
+                )]
+            }
         }
     }
 
@@ -326,6 +340,12 @@ impl<'a> MystWriter<'a> {
             out.push(format!(":label: {}", self.myst_label(source, l).raw));
         }
         for (k, v) in attrs {
+            if k == "id" {
+                continue;
+            }
+            if k == "alt" && caption.first().map(|c| c.trim()) == Some(v.trim()) {
+                continue;
+            }
             out.push(format!(":{k}: {v}"));
         }
         if !caption.is_empty() {
@@ -473,6 +493,24 @@ impl<'a> MystWriter<'a> {
 
     fn render_nested(&self, body: &[Block], source: &Path) -> Vec<String> {
         crate::writer::render_body(body, |b| self.render_block(b, source))
+    }
+}
+
+fn myst_include_target(target: &std::path::Path) -> std::path::PathBuf {
+    let dir = target
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let stem = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("include");
+    let stem = stem.strip_prefix('_').unwrap_or(stem);
+    let name = format!("{stem}.md");
+    if dir.as_os_str().is_empty() {
+        name.into()
+    } else {
+        dir.join(name)
     }
 }
 

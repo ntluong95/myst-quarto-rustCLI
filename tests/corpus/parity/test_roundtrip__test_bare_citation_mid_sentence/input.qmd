@@ -1,1 +1,2 @@
+<!-- mystquarto-roundtrip: normalized -->
 As @smith2020 noted.

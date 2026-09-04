@@ -1,0 +1,3 @@
+## Data {#sec-data}
+
+Some prose with [@smith2020] and @sec-data.

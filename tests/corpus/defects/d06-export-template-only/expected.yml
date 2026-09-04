@@ -1,3 +1,6 @@
+project:
+  type: manuscript
 title: Sample Article
+# mystquarto: `template: lapreprint-typst` is not portable to Quarto; inferred format `typst`
 format:
-  typst: {}  # template: lapreprint-typst
+  typst: {}

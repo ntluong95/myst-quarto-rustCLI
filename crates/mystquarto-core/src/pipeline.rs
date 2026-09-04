@@ -214,7 +214,7 @@ fn load_preservation_store(input_root: &Path) -> crate::reader::PreservationStor
     let path = input_root.join(".mystquarto").join("preserved.json");
     if let Some(sidecar) = crate::preserve::read(&path) {
         for (id, entry) in sidecar.entries {
-            store.insert(id, entry.original);
+            store.insert_dialect(id, entry.dialect, entry.original);
         }
     }
     store

@@ -14,7 +14,7 @@ blocks: []
 
 ## Overview
 
-Plan status: `in-progress`. Completed phases: 7/9.
+Plan status: `in-progress`. Completed phases: 8/9.
 
 Port `mystquarto` from Python to Rust, replacing the regex line-scanner with a
 typed document IR, and fixing the 16 verified defects catalogued in
@@ -84,7 +84,7 @@ carries the distribution and performance win.
 | 5 | [Writers: IR → MyST + Quarto, label normalization](./phase-05-writers.md) | Done | 4 |
 | 6 | [Config & frontmatter mapping](./phase-06-config-frontmatter.md) | Done | 3, 4 |
 | 7 | [Diagnostics & lossy preservation](./phase-07-diagnostics.md) | Done | 5, 6 |
-| 8 | [Test corpus & renderer-backed validation](./phase-08-test-corpus.md) | Pending | 7 |
+| 8 | [Test corpus & renderer-backed validation](./phase-08-test-corpus.md) | Done | 7 |
 | 9 | [Ship: packaging, CI, docs, Python removal](./phase-09-ship.md) | Pending | 8 |
 
 **Sequencing is strictly serial.** The original plan claimed Phases 4/5 and 6
@@ -150,28 +150,28 @@ information. The IR makes construct type available at write time.
 
 ## Success Criteria
 
-- [ ] `cargo test` green; the Phase 1 test classification is satisfied in full
+- [x] `cargo test` green; the Phase 1 test classification is satisfied in full
       (data-fixture cases as corpus, CLI/config cases as Rust integration tests)
-- [ ] All 16 defects in `docs/dialect-comparison.md` §12 have a named regression
+- [x] All 16 defects in `docs/dialect-comparison.md` §12 have a named regression
       test whose recorded `python-actual.*` **differs** from `expected.*`
-- [ ] `myst2quarto article-template/ -o /tmp/q` produces a tree where
+- [x] `myst2quarto article-template/ -o /tmp/q` produces a tree where
       `quarto render` exits 0, produces HTML, and has zero unresolved
       cross-references (`?@`) **and zero unresolved citations**
-- [ ] `quarto2myst` on that output, then `myst build`, exits 0
-- [ ] Round-trip MyST→Quarto→MyST is byte-identical on the declared Stable class
+- [x] `quarto2myst` on that output, then `myst build`, exits 0
+- [x] Round-trip MyST→Quarto→MyST is byte-identical on the declared Stable class
       when the sidecar map is present
-- [ ] `--strict` exits 0 on a correct conversion of `article-template/` and
+- [x] `--strict` exits 0 on a correct conversion of `article-template/` and
       non-zero when a genuine information loss occurs
-- [ ] No conversion completes silently when information was dropped
-- [ ] Path-safety suite passes: symlink escape, `..` include traversal, include
+- [x] No conversion completes silently when information was dropped
+- [x] Path-safety suite passes: symlink escape, `..` include traversal, include
       cycle, output-inside-input, hostile sidecar — all refused with diagnostics
-- [ ] Running any conversion twice produces byte-identical trees and no nesting
-- [ ] `--dry-run` writes zero bytes for every flag combination, verified by a
+- [x] Running any conversion twice produces byte-identical trees and no nesting
+- [x] `--dry-run` writes zero bytes for every flag combination, verified by a
       recursive tree hash
 - [ ] `cargo install mystquarto` and `npx mystquarto` both work from a clean machine
 - [ ] `src/mystquarto/` and `tests/*.py` removed **after** a tagged commit and a
       final PyPI deprecation release
-- [ ] `docs/dialect-comparison.md` matches implemented behavior (audited Phase 8)
+- [x] `docs/dialect-comparison.md` matches implemented behavior (audited Phase 8)
 
 ## Open Questions
 

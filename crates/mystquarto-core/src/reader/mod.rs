@@ -60,14 +60,14 @@ impl ReaderContext {
                 path: target.to_path_buf(),
             });
         }
-        let resolved = if let Some(root) = &self.input_root {
+        let chain_target = if let Some(root) = &self.input_root {
             guard_target(root, &self.source_dir(), target)?
         } else {
             target.to_path_buf()
         };
         let mut chain = self.include_chain.clone();
-        chain.push(resolved.clone())?;
-        Ok(resolved)
+        chain.push(chain_target)?;
+        Ok(target.to_path_buf())
     }
 }
 

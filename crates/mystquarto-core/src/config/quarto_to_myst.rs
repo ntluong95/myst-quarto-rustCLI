@@ -73,7 +73,7 @@ pub fn convert(
 
     let mut warnings = Vec::new();
     let mut project_fields: Vec<(String, YamlValue)> = Vec::new();
-    let mut top_fields: Vec<EmitField> = Vec::new();
+    let mut top_fields: Vec<EmitField> = vec![EmitField::new("version", YamlValue::Int(1))];
 
     let book = mapping_field(&root, "book");
     let (title, authors, toc, appendices) = if is_book {
@@ -152,7 +152,23 @@ pub fn convert(
         project_fields.push(("github".to_string(), YamlValue::String(v)));
     }
     if let Some(v) = string_field(&root, "bibliography") {
-        project_fields.push(("bibliography".to_string(), YamlValue::String(v)));
+        if !v.contains(".mystquarto/doi-references.bib") {
+            project_fields.push(("bibliography".to_string(), YamlValue::String(v)));
+        }
+    } else if let Some(seq) = get(&root, "bibliography").and_then(as_sequence) {
+        let filtered: Vec<YamlValue> = seq
+            .iter()
+            .filter(|item| match item {
+                YamlValue::String(s) => !s.contains(".mystquarto/doi-references.bib"),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        if filtered.len() == 1 {
+            project_fields.push(("bibliography".to_string(), filtered[0].clone()));
+        } else if !filtered.is_empty() {
+            project_fields.push(("bibliography".to_string(), YamlValue::Sequence(filtered)));
+        }
     }
     if let Some(v) = string_field(&root, "image") {
         project_fields.push(("banner".to_string(), YamlValue::String(v)));

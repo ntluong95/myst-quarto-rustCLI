@@ -132,4 +132,10 @@ pub mod io {
     /// (`mystquarto::orchestrate`), or `crate::notebook::relabel` itself
     /// failed. Severity: Warning.
     pub const NOTEBOOK_RELABEL_FAILED: &str = "MQ0603";
+    /// An asset path was a symlink and was skipped without dereferencing
+    /// the target. Severity: Warning.
+    pub const SYMLINK_ASSET_SKIPPED: &str = "MQ0604";
+    /// A path-safety check refused an include or embed target (escapes root,
+    /// include cycle, depth exceeded, or absolute target). Severity: Warning.
+    pub const PATH_SAFETY_REFUSED: &str = "MQ0605";
 }

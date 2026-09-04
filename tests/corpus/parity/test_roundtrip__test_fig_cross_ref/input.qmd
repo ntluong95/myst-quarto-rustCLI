@@ -1,1 +1,2 @@
+<!-- mystquarto-roundtrip: normalized -->
 As shown in @fig-results.

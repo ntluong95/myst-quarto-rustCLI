@@ -3,5 +3,5 @@ project:
 book:
   title: Sample Book
   chapters:
-  - intro.qmd
-  - analysis.ipynb
+    - intro.qmd
+    - analysis.ipynb

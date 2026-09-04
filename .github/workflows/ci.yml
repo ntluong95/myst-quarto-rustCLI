@@ -36,3 +36,20 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  renderer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup show
+      - name: Install Quarto 1.9.36
+        run: |
+          curl -fsSL -o quarto.deb https://github.com/quarto-dev/quarto-cli/releases/download/v1.9.36/quarto-1.9.36-linux-amd64.deb
+          sudo dpkg -i quarto.deb
+          quarto --version
+      - name: Install MyST 1.10.1
+        run: |
+          npm install -g mystmd@1.10.1
+          myst --version
+      - run: cargo test -p mystquarto --features renderer-tests --test renderer

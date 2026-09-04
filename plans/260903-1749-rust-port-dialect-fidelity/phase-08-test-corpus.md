@@ -1,7 +1,7 @@
 ---
 phase: 8
 title: "Test corpus & renderer-backed validation"
-status: pending
+status: done
 priority: P1
 effort: "5d"
 dependencies: [7]
@@ -95,8 +95,8 @@ also a bug. Both are asserted.
 
 - Create: `crates/mystquarto-core/tests/corpus.rs` — data-driven runner
 - Create: `crates/mystquarto-core/tests/roundtrip.rs`
-- Create: `crates/mystquarto-cli/tests/cli.rs` — flag behavior, exit codes
-- Create: `crates/mystquarto-cli/tests/renderer.rs` — feature-gated
+- Create: `crates/mystquarto/tests/cli.rs` — flag behavior, exit codes
+- Create: `crates/mystquarto/tests/renderer.rs` — feature-gated
 - Create: `scripts/check-refs.sh` — the `?@` grep check
 - Modify: `tests/corpus/**` — add round-trip class headers
 - Modify: `.github/workflows/ci.yml` — add the renderer job
@@ -124,26 +124,41 @@ also a bug. Both are asserted.
 
 ## Success Criteria
 
-- [ ] All bucket A parity cases pass, or are documented as intentional
+- [x] All bucket A parity cases pass, or are documented as intentional
       modern-MyST changes; bucket B tests pass in their owning phases
-- [ ] All 16 defect cases pass, each in its declared direction
-- [ ] `quarto render` on converted `article-template/` exits 0 **and produces HTML**
-- [ ] `check-refs.sh` finds zero `?@` markers, zero unresolved citations, and
+- [x] All 16 defect cases pass, each in its declared direction
+- [x] `quarto render` on converted `article-template/` exits 0 **and produces HTML**
+- [x] `check-refs.sh` finds zero `?@` markers, zero unresolved citations, and
       zero Citeproc "not found" warnings (RT-14)
-- [ ] No executable markup from preserved content appears in the rendered HTML (RT-02)
-- [ ] `myst build` on the reverse conversion exits 0 with no unresolved-reference
+- [x] No executable markup from preserved content appears in the rendered HTML (RT-02)
+- [x] `myst build` on the reverse conversion exits 0 with no unresolved-reference
       warnings
-- [ ] `--strict` exits **0** on the correct conversion; `--strict=all` exits 1 (RT-10)
-- [ ] Path-safety suite passes end to end: symlink escape, `..` include traversal,
+- [x] `--strict` exits **0** on the correct conversion; `--strict=all` exits 1 (RT-10)
+- [x] Path-safety suite passes end to end: symlink escape, `..` include traversal,
       include cycle, depth cap, output-inside-input, hostile sidecar
-- [ ] Converting `article-template/` twice produces byte-identical trees with no nesting
-- [ ] D13 has its own include fixtures — the article-template fixture has none (RT-15)
-- [ ] Every corpus file declares a round-trip class and honors it
-- [ ] Every Lossy-class file produces at least one diagnostic
-- [ ] Every reference §2 construct has at least one corpus case
-- [ ] `cargo test` passes without Quarto/MyST installed
-- [ ] `cargo test --features renderer-tests` passes with both installed
-- [ ] Reference doc audited; discrepancies corrected
+- [x] Converting `article-template/` twice produces byte-identical trees with no nesting
+- [x] D13 has its own include fixtures — the article-template fixture has none (RT-15)
+- [x] Every corpus file declares a round-trip class and honors it
+- [x] Every Lossy-class file produces at least one diagnostic
+- [x] Every reference §2 construct has at least one corpus case
+- [x] `cargo test` passes without Quarto/MyST installed
+- [x] `cargo test --features renderer-tests` passes with both installed
+- [x] Reference doc audited; discrepancies corrected
+
+## Implementation Notes
+
+- Added data-driven corpus and round-trip tests under `crates/mystquarto-core/tests/`.
+- Added renderer-backed validation under `crates/mystquarto/tests/renderer.rs`, gated by
+  `renderer-tests` and run as `cargo test -p mystquarto --features renderer-tests --test renderer`
+  from the virtual workspace.
+- Added `.github/workflows/ci.yml` renderer coverage installing Quarto 1.9.36 and
+  `mystmd@1.10.1`.
+- Added `scripts/check-refs.sh` for unresolved cross-reference and citation checks.
+- Renderer validation exposed real fixes in inline parsing, include path normalization,
+  MyST config version emission, sidecar dialect retention, Quarto-to-MyST include writing,
+  symlink diagnostics, and DOI citation fallback bibliography generation.
+- Validation passed for Rust unit/integration/corpus/renderer tests and legacy pytest.
+  Legacy Python Ruff check/format still report pre-existing issues outside this phase.
 
 ## Risk Assessment
 

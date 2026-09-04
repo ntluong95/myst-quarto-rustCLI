@@ -1,0 +1,6 @@
+::: {.panel-tabset}
+## Alpha
+Tab A content.
+## Beta
+Tab B content.
+:::

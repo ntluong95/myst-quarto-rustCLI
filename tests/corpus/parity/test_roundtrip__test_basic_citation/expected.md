@@ -1,1 +1,1 @@
-See {cite}`smith2020` for details.
+See [@smith2020] for details.

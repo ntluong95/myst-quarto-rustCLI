@@ -66,7 +66,7 @@ fn read_braced_eval(rest: &str) -> Option<(usize, InlineEvent)> {
     let body_start = close + 1;
     let end = tail[body_start..].find('`')? + body_start;
     Some((
-        end + 2,
+        end + 3,
         InlineEvent::JupyterEval {
             engine: engine.to_string(),
             expr: tail[body_start..end].trim().to_string(),
@@ -77,7 +77,7 @@ fn read_braced_eval(rest: &str) -> Option<(usize, InlineEvent)> {
 fn read_knitr_eval(rest: &str) -> Option<(usize, InlineEvent)> {
     let tail = rest.strip_prefix("`r ")?;
     let end = tail.find('`')?;
-    Some((end + 3, InlineEvent::KnitrEval(tail[..end].to_string())))
+    Some((end + 4, InlineEvent::KnitrEval(tail[..end].to_string())))
 }
 
 fn read_bracket_citation(rest: &str) -> Option<(usize, Vec<InlineEvent>)> {
@@ -137,11 +137,18 @@ fn read_at_reference(rest: &str, known_labels: &[String]) -> Option<(usize, Inli
     while key.ends_with('/') {
         key.pop();
     }
-    if known_labels.iter().any(|l| l == &key) {
+    if known_labels.iter().any(|l| l == &key) || has_crossref_prefix(&key) {
         Some((1 + key.len(), InlineEvent::CrossReference(key)))
     } else {
         Some((1 + key.len(), InlineEvent::Citation(key)))
     }
+}
+
+fn has_crossref_prefix(key: &str) -> bool {
+    matches!(
+        key.split_once(':').map(|(prefix, _)| prefix),
+        Some("fig" | "tbl" | "tab" | "eq" | "sec" | "nb" | "thm")
+    )
 }
 
 /// Rewrites `line` for a specific writer target, leaving three things
@@ -250,6 +257,28 @@ mod tests {
             scan.events.last(),
             Some(InlineEvent::JupyterEval { engine, .. }) if engine == "python"
         ));
+    }
+
+    #[test]
+    fn inline_eval_match_consumes_the_closing_backtick() {
+        let out = rewrite_line("`r x + 1` and `{python} x`.", &[], |event| match event {
+            InlineEvent::KnitrEval(expr) => Some(format!("{{eval}}`{expr}`")),
+            InlineEvent::JupyterEval { expr, .. } => Some(format!("`{{python}} {expr}`")),
+            _ => None,
+        });
+        assert_eq!(out, "{eval}`x + 1` and `{python} x`.");
+    }
+
+    #[test]
+    fn known_myst_reference_prefixes_are_crossrefs_even_without_definitions() {
+        let scan = scan_line("See @fig:samples and @numpy.", &[]);
+        assert_eq!(
+            scan.events,
+            vec![
+                InlineEvent::CrossReference("fig:samples".to_string()),
+                InlineEvent::Citation("numpy".to_string())
+            ]
+        );
     }
 
     #[test]

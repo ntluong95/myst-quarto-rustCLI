@@ -65,6 +65,25 @@ fn myst_include_targets_are_checked_by_path_guard() {
 }
 
 #[test]
+fn myst_include_in_subdirectory_retains_relative_target() {
+    let tmp = tempdir("include-subdir");
+    let input = tmp.join("input");
+    let sub = input.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("snippet.md"), "content").unwrap();
+    let root = canonicalize_root(&input).unwrap();
+    let source = sub.join("article.md");
+    let reader = MystReader::new(ReaderContext::new(source).with_input_root(root));
+    let doc = reader.read_str("```{include} snippet.md\n```\n").unwrap();
+
+    assert!(
+        matches!(&doc.blocks[0].kind, BlockKind::Include { target, .. } if target == Path::new("snippet.md")),
+        "include in subdirectory should retain target relative to document, not relative to project root"
+    );
+    cleanup(&tmp);
+}
+
+#[test]
 fn unresolved_notebook_cell_ref_becomes_unmappable() {
     let reader = MystReader::new(ReaderContext::new("article.md"));
     let doc = reader.read_str(":::{figure} #nb:missing\n:::\n").unwrap();

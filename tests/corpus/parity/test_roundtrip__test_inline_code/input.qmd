@@ -1,1 +1,2 @@
+<!-- mystquarto-roundtrip: normalized -->
 The value is `{python} compute_value()`.

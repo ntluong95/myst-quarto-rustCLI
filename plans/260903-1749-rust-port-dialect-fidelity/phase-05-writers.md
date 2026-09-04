@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Writers: IR → MyST + Quarto, label normalization"
-status: pending
+status: done
 priority: P1
 effort: "6d"
 dependencies: [4]

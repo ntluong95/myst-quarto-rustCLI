@@ -1,0 +1,3 @@
+::: {.callout-important}
+Hazard ahead.
+:::

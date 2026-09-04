@@ -1,3 +1,4 @@
+<!-- mystquarto-roundtrip: stable -->
 See @fig:samples for the distribution.
 
 ```{math}

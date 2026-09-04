@@ -1,3 +1,4 @@
+<!-- mystquarto-roundtrip: stable -->
 See the analysis output below.
 
 :::{figure} #nb:analysis
