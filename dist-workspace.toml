@@ -3,6 +3,11 @@ members = ["cargo:."]
 
 # Config for 'dist'
 [dist]
+# release.yml's third-party actions are hand SHA-pinned after generation
+# (repo convention, see ci.yml); this stops dist's "CI out of date" check
+# from failing on that diff. Re-run `dist generate` + re-pin, then this
+# stays accurate, if the underlying dist version bumps.
+allow-dirty = ["ci"]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
 # CI backends to support
