@@ -250,7 +250,18 @@ any other contributor or CI job. Fixed by vendoring `article-template/` as
 tracked content (its nested `.git` removed by the user, since a local
 permission hook blocks this agent from touching any `.git` path) — see the
 `chore: vendor article-template` commit. Confirmed fixed: re-ran CI after
-pushing, both jobs green on a second fresh checkout.
+pushing, both jobs green on a second fresh checkout
+(https://github.com/ntluong95/myst-quarto-rustCLI/actions/runs/33837415540).
+
+**Second bug found and fixed by validating the release config, not just
+trusting it:** `dist plan` initially failed with "release.yml has out of
+date contents and needs to be regenerated" — cargo-dist's own drift check
+rejects any hand-edit to its generated file, which would have failed the
+release workflow's `plan` job on the first real tag push and silently
+reverted the SHA-pinning this repo's actions require. Fixed by adding
+`allow-dirty = ["ci"]` to `dist-workspace.toml`. Re-ran `dist plan`
+afterward: clean six-platform + npm artifact plan, no errors — this is as
+close to a release dry run as is possible without actually pushing a tag.
 
 **Commands for the user to run themselves, in order:**
 
