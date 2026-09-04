@@ -169,12 +169,15 @@ without keeping the code.
       over that PyPI package is operating this repo. Flagged, not silently
       skipped.
 - [x] No `.py` files remain outside `tests/corpus/`
-- [x] CI is Rust-only and green
-- [x] Clean-machine verification: `article-template/` converts and
-      `quarto render` + `myst build` succeed locally via
-      `cargo test -p mystquarto --features renderer-tests --test renderer`
-      (not yet verified from an actual clean/containerized machine or via a
-      published binary)
+- [x] CI is Rust-only and green — verified against a real GitHub Actions run
+      on a fresh clone (`gh run watch`), not just locally:
+      https://github.com/ntluong95/myst-quarto-rustCLI/actions/runs/33837415540
+- [x] Clean-machine verification: confirmed on a genuinely fresh machine (a
+      GitHub Actions Ubuntu runner, first-ever CI run against this repo) —
+      `article-template/` converts, `quarto render` and `myst build` both
+      succeed with zero unresolved references. Not yet verified via an
+      actually-published binary (`cargo install`/`npx`), since nothing has
+      been published — see the publish commands above.
 
 ## Implementation Notes
 
@@ -230,6 +233,24 @@ Done in this session:
   path. If the user does control that PyPI account separately, they should
   publish a final 0.1.3 pointing at the new repo by hand; nothing in this
   repo can do that for them.
+
+**Bug found and fixed by actually running CI (not just locally):** the first
+push to the new remote failed both jobs. `rust` failed to *compile the test
+profile at all* — five `include_str!("../../../../article-template/...")`
+calls inside `#[cfg(test)]` blocks across `myst_to_quarto.rs`,
+`project_type.rs`, `notebook.rs`, and `writer/quarto.rs` (plus two more in
+`tests/readers.rs`) reference `article-template/`, which was `.gitignore`d
+and had never actually been committed — it only "worked" because the
+directory happened to already exist on this machine's disk, invisible until
+a real fresh-checkout CI run existed to catch it. `renderer` failed the same
+way at the integration-test level. This is why the exercise-the-real-thing
+step of this workflow matters: every local `cargo test --workspace` run in
+this session was silently passing against an artifact that would fail for
+any other contributor or CI job. Fixed by vendoring `article-template/` as
+tracked content (its nested `.git` removed by the user, since a local
+permission hook blocks this agent from touching any `.git` path) — see the
+`chore: vendor article-template` commit. Confirmed fixed: re-ran CI after
+pushing, both jobs green on a second fresh checkout.
 
 **Commands for the user to run themselves, in order:**
 
